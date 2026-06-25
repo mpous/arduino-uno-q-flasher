@@ -12,30 +12,39 @@ const STAGES = [
     "post_update",
 ];
 
-// Stages Update All skips: everything except push_setup_script, push_env,
-// chmod_script, run_setup. The user wants Update All to "just rerun the
-// setup script" (no app push, no password change, no properties, no post).
+// Stages Update All skips: everything except push_setup_script, chmod_script,
+// run_setup. The user wants Update All to "just rerun the setup script" (no
+// app push, no env push, no password change, no properties, no post-update).
 const UPDATE_SKIP_STAGES = [
+    "push_env",
     "change_password",
     "push_properties",
     "post_update",
 ];
 
+// Stages skipped when "Skip Step 1" (WiFi creds) toggle is on.
+const SKIP_STEP_WIFI_STAGES = ["push_env", "change_password"];
+
+// Stages skipped when "Skip Step 2" (app folder) toggle is on. push_app is
+// also implicitly skipped because the request goes out with upload_id=null.
+const SKIP_STEP_FOLDER_STAGES = ["push_properties"];
+
 const DEVICE_POLL_MS = 5000;
 
 const state = {
-    upload: null,         // { upload_id, folder_name, file_count, eim_files }
-    folderFiles: null,    // FileList from the picker
-    devices: [],          // [{ serial, state }]
-    cards: new Map(),     // serial -> { ...refs }
+    upload: null,
+    folderFiles: null,
+    devices: [],
+    cards: new Map(),
     runId: null,
     ws: null,
     wifiOk: false,
+    skipStep1: false,
+    skipStep2: false,
 
-    // run-progress aggregate
     runTotal: 0,
     runCompleted: 0,
-    runMode: null,        // 'start' | 'update'
+    runMode: null,
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -45,6 +54,7 @@ const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 
 async function init() {
     wireControls();
+    await populateSettingsForm();
     await refreshHealth();
     await refreshDevices();
     setInterval(refreshDevices, DEVICE_POLL_MS);
@@ -58,10 +68,21 @@ function wireControls() {
     });
     $("#start-btn").addEventListener("click", () => startRun("start"));
     $("#update-btn").addEventListener("click", () => startRun("update"));
-    $("#open-settings-btn").addEventListener("click", openSettings);
-    $("#close-settings-btn").addEventListener("click", closeSettings);
     $("#save-settings-btn").addEventListener("click", saveSettings);
-    $("#wifi-inline-configure").addEventListener("click", openSettings);
+    $("#skip-step-wifi").addEventListener("change", onSkipWifiToggle);
+    $("#skip-step-folder").addEventListener("change", onSkipFolderToggle);
+}
+
+function onSkipWifiToggle(e) {
+    state.skipStep1 = e.target.checked;
+    renderWifiStepFromState();
+    updateStartButtons();
+}
+
+function onSkipFolderToggle(e) {
+    state.skipStep2 = e.target.checked;
+    renderFolderStepFromState();
+    updateStartButtons();
 }
 
 // ---------- health & WiFi step ----------
@@ -90,10 +111,21 @@ async function refreshHealth() {
 }
 
 function renderWifiStep(health) {
+    state.wifiHealth = health;
+    renderWifiStepFromState();
+}
+
+function renderWifiStepFromState() {
     const step = $("#step-wifi");
     const stateEl = $("#step-wifi-state");
-    const ssidSet = health.wifi_ssid_configured;
-    const pwSet = health.wifi_password_configured;
+    if (state.skipStep1) {
+        step.dataset.status = "skipped";
+        stateEl.textContent = "skipped — board keeps existing WiFi";
+        return;
+    }
+    const h = state.wifiHealth || {};
+    const ssidSet = !!h.wifi_ssid_configured;
+    const pwSet = !!h.wifi_password_configured;
     if (ssidSet && pwSet) {
         step.dataset.status = "configured";
         stateEl.textContent = "✓ configured";
@@ -107,35 +139,42 @@ function renderWifiStep(health) {
         step.dataset.status = "warning";
         stateEl.textContent = "password needed";
     }
-    // Inline notice (lives in step 3, near the action buttons).
-    $("#wifi-inline-notice").hidden = state.wifiOk;
 }
 
-// ---------- settings panel ----------
+function renderFolderStepFromState() {
+    const step = $("#step-folder");
+    const stateEl = $("#step-folder-state");
+    if (state.skipStep2) {
+        step.dataset.status = "skipped";
+        stateEl.textContent = "skipped — board keeps existing apps";
+        return;
+    }
+    if (state.upload) {
+        step.dataset.status = "configured";
+        const mb = state.folderFiles ? approxSize(state.folderFiles) : "";
+        stateEl.textContent = mb
+            ? `${state.upload.folder_name} · ${state.upload.file_count} files · ${mb}`
+            : `${state.upload.folder_name} · ${state.upload.file_count} files`;
+    } else {
+        step.dataset.status = "optional";
+        stateEl.textContent = "none";
+    }
+}
 
-async function openSettings() {
-    const form = $("#wifi-settings-form");
-    form.hidden = false;
-    $("#open-settings-btn").hidden = true;
+// ---------- settings (always-visible inline form in Step 1) ----------
+
+async function populateSettingsForm() {
     try {
         const r = await fetch("/api/settings");
         const j = await r.json();
         $("#setting-ssid").value = j.UNOQ_WIFI_SSID || "";
-        $("#setting-wifi-pw").placeholder = j.UNOQ_WIFI_PASSWORD_set ? "(set — leave blank to keep)" : "••••••••";
-        $("#setting-device-pw").placeholder = j.UNOQ_DEFAULT_PASSWORD_set ? "(set — leave blank to keep)" : "••••••••";
-        // Autofocus the first empty input for fast typing.
-        const focusTarget = !$("#setting-ssid").value
-            ? $("#setting-ssid") : $("#setting-wifi-pw");
-        focusTarget.focus();
+        $("#setting-wifi-pw").placeholder = j.UNOQ_WIFI_PASSWORD_set
+            ? "(set — leave blank to keep)" : "••••••••";
+        $("#setting-device-pw").placeholder = j.UNOQ_DEFAULT_PASSWORD_set
+            ? "(set — leave blank to keep)" : "••••••••";
     } catch (e) {
         $("#settings-status").textContent = `load failed: ${e}`;
     }
-}
-
-function closeSettings() {
-    $("#wifi-settings-form").hidden = true;
-    $("#open-settings-btn").hidden = false;
-    $("#settings-status").textContent = "";
 }
 
 async function saveSettings() {
@@ -165,10 +204,10 @@ async function saveSettings() {
         $("#setting-wifi-pw").value = "";
         $("#setting-device-pw").value = "";
         await refreshHealth();
-        // Auto-close once everything is configured.
-        if (state.wifiOk) {
-            setTimeout(closeSettings, 600);
-        }
+        // Clear the "saved" indicator after a moment.
+        setTimeout(() => {
+            $("#settings-status").textContent = "";
+        }, 1500);
     } catch (e) {
         $("#settings-status").textContent = `save error: ${e}`;
     }
@@ -246,7 +285,9 @@ async function onFolderPicked(e) {
     if (!files || files.length === 0) return;
     state.folderFiles = files;
     const rootName = (files[0].webkitRelativePath || files[0].name).split("/")[0];
-    updateFolderStep("uploading", `${rootName} — uploading ${files.length} files…`);
+    state.upload = null;
+    $("#step-folder-state").textContent = `${rootName} — uploading ${files.length} files…`;
+    $("#step-folder").dataset.status = "optional";
     renderEimList(null);
 
     const fd = new FormData();
@@ -259,27 +300,19 @@ async function onFolderPicked(e) {
         const r = await fetch("/api/upload", { method: "POST", body: fd });
         if (!r.ok) {
             const j = await r.json().catch(() => ({}));
-            updateFolderStep("error", `upload failed: ${j.detail || r.status}`);
+            $("#step-folder-state").textContent = `upload failed: ${j.detail || r.status}`;
+            $("#step-folder").dataset.status = "warning";
             return;
         }
         const j = await r.json();
         state.upload = j;
-        const mb = approxSize(files);
-        const summary = `${j.folder_name} · ${j.file_count} files · ${mb}`;
-        updateFolderStep("configured", summary);
+        renderFolderStepFromState();
         renderEimList(j.eim_files || []);
         updateStartButtons();
     } catch (err) {
-        updateFolderStep("error", `upload error: ${err}`);
+        $("#step-folder-state").textContent = `upload error: ${err}`;
+        $("#step-folder").dataset.status = "warning";
     }
-}
-
-function updateFolderStep(status, text) {
-    const step = $("#step-folder");
-    if (status === "configured") step.dataset.status = "configured";
-    else if (status === "error") step.dataset.status = "warning";
-    else step.dataset.status = "optional";
-    $("#step-folder-state").textContent = text;
 }
 
 function renderEimList(eimFiles) {
@@ -330,30 +363,38 @@ function updateStartButtons() {
     const haveDevices = state.devices.length > 0;
     const haveFolder = !!state.upload;
     const idle = state.runId === null;
-    const startReady = haveDevices && state.wifiOk && haveFolder && idle;
-    const updateReady = haveDevices && state.wifiOk && idle;
+
+    const step1ok = state.wifiOk || state.skipStep1;
+    const step2ok = haveFolder || state.skipStep2;
+
+    const startReady = haveDevices && idle && step1ok && step2ok;
+    // Update All never pushes WiFi creds / app / properties, so it works as
+    // long as devices are connected. WiFi being unset is fine — the device
+    // uses whatever creds were previously pushed.
+    const updateReady = haveDevices && idle;
 
     $("#start-btn").disabled = !startReady;
     $("#update-btn").disabled = !updateReady;
 
-    // Tooltips spell out exactly what's missing.
     $("#start-btn").title = startReady
-        ? "Flash app to all boards and run setup + post-update"
-        : missingFor("start", haveDevices, state.wifiOk, haveFolder, idle);
+        ? "Push app (if not skipped), configure WiFi, run setup + post-update"
+        : missingFor("start", haveDevices, step1ok, step2ok, idle);
     $("#update-btn").title = updateReady
-        ? "Re-run setup script on all boards (no app push)"
-        : missingFor("update", haveDevices, state.wifiOk, true, idle);
+        ? "Re-run setup script on all boards (no app push, no WiFi change)"
+        : (idle ? "Connect at least one UNO Q" : "A run is in progress");
 
     updateRunStepState();
 }
 
-function missingFor(kind, haveDevices, wifiOk, haveFolder, idle) {
-    if (!idle) return "A run is already in progress";
+function missingFor(kind, haveDevices, step1ok, step2ok, idle) {
+    if (!idle) return "A run is in progress";
     const missing = [];
     if (!haveDevices) missing.push("connect at least one UNO Q");
-    if (!wifiOk) missing.push("configure WiFi credentials");
-    if (kind === "start" && !haveFolder) missing.push("choose an app folder");
-    return missing.length ? "Needed: " + missing.join(", ") : "";
+    if (!step1ok) missing.push("configure WiFi or check 'Skip' in Step 1");
+    if (kind === "start" && !step2ok) {
+        missing.push("choose a folder or check 'Skip' in Step 2");
+    }
+    return missing.length ? "Needed: " + missing.join("; ") : "";
 }
 
 function updateRunStepState(override) {
@@ -389,15 +430,28 @@ async function startRun(mode /* 'start' | 'update' */) {
     if (state.devices.length === 0) return;
     state.runMode = mode;
 
-    const baseSkip = mode === "update" ? UPDATE_SKIP_STAGES : [];
+    let baseSkip;
+    if (mode === "update") {
+        baseSkip = [...UPDATE_SKIP_STAGES];
+    } else {
+        baseSkip = [];
+        if (state.skipStep1) baseSkip.push(...SKIP_STEP_WIFI_STAGES);
+        if (state.skipStep2) baseSkip.push(...SKIP_STEP_FOLDER_STAGES);
+    }
+
     const devices = state.devices.map((d) => {
         const userSkip = collectSkip(d.serial);
         const skip = Array.from(new Set([...baseSkip, ...userSkip]));
         return { serial: d.serial, skip_stages: skip };
     });
+
     const postUpdateCmd = mode === "update"
-        ? ""  // skip post-update for "update only" runs
+        ? ""
         : ($("#post-update-cmd").value || "").trim();
+
+    // Update All never sends the upload. Start All omits it too when step 2
+    // is skipped.
+    const sendUpload = mode !== "update" && !state.skipStep2 && state.upload;
 
     resetAllCards();
     showRunProgress(state.devices.length, mode);
@@ -406,8 +460,7 @@ async function startRun(mode /* 'start' | 'update' */) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-            upload_id: mode === "update" ? null
-                : (state.upload ? state.upload.upload_id : null),
+            upload_id: sendUpload ? state.upload.upload_id : null,
             devices,
             post_update_cmd: postUpdateCmd || null,
         }),

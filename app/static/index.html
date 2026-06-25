@@ -30,9 +30,11 @@
                 </div>
             </div>
             <div class="step-body">
-                <button id="open-settings-btn" class="btn">Configure</button>
-
-                <div id="wifi-settings-form" class="inline-settings" hidden>
+                <label class="step-skip">
+                    <input type="checkbox" id="skip-step-wifi" />
+                    <span>Skip — keep existing WiFi & device password on board</span>
+                </label>
+                <div id="wifi-settings-form" class="inline-settings">
                     <label class="inline-setting">
                         <span>WiFi SSID</span>
                         <input type="text" id="setting-ssid" placeholder="MyNetwork" />
@@ -47,7 +49,6 @@
                     </label>
                     <div class="inline-settings-actions">
                         <button id="save-settings-btn" class="btn btn-primary btn-small">Save</button>
-                        <button id="close-settings-btn" class="btn btn-small">Cancel</button>
                         <span id="settings-status" class="muted"></span>
                     </div>
                 </div>
@@ -65,13 +66,19 @@
                 </div>
             </div>
             <div class="step-body">
-                <label class="file-picker">
-                    <input type="file" id="folder-input" webkitdirectory directory multiple />
-                    <span class="btn">Choose folder</span>
+                <label class="step-skip">
+                    <input type="checkbox" id="skip-step-folder" />
+                    <span>Skip — keep existing apps on board</span>
                 </label>
-                <div id="eim-info" class="eim-info" hidden>
-                    <div class="eim-info-header">.eim models</div>
-                    <ul id="eim-list"></ul>
+                <div id="folder-controls">
+                    <label class="file-picker">
+                        <input type="file" id="folder-input" webkitdirectory directory multiple />
+                        <span class="btn">Choose folder</span>
+                    </label>
+                    <div id="eim-info" class="eim-info" hidden>
+                        <div class="eim-info-header">.eim models</div>
+                        <ul id="eim-list"></ul>
+                    </div>
                 </div>
                 <label class="post-update-label">
                     Post-update command (run after setup)
@@ -101,10 +108,6 @@
                     <button id="update-btn" class="btn btn-secondary" disabled>Update all</button>
                 </div>
                 <button id="refresh-btn" class="btn btn-ghost btn-small">⟳ Refresh devices</button>
-                <div id="wifi-inline-notice" class="inline-notice" hidden>
-                    <span>⚠ WiFi credentials needed before running.</span>
-                    <button id="wifi-inline-configure" class="btn-link">Configure</button>
-                </div>
                 <div id="run-status" class="muted"></div>
             </div>
         </div>

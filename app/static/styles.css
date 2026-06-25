@@ -130,6 +130,50 @@ html, body {
 
 /* ===== inline WiFi settings (lives inside Step 1) ===== */
 
+.step-skip {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    cursor: pointer;
+    user-select: none;
+    padding: 8px 10px;
+    background: var(--surface-muted);
+    border: 1px dashed var(--border);
+    border-radius: var(--radius-sm);
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.step-skip input[type="checkbox"] {
+    margin: 2px 0 0 0;
+    accent-color: var(--accent);
+    flex-shrink: 0;
+}
+
+.step-skip span {
+    line-height: 1.4;
+}
+
+.step[data-status="skipped"] {
+    background: var(--surface-muted);
+    border-style: dashed;
+}
+
+.step[data-status="skipped"] .step-number {
+    background: var(--surface-muted);
+    color: var(--text-faint);
+}
+
+.step[data-status="skipped"] .step-state {
+    color: var(--text-faint);
+    font-style: italic;
+}
+
+.step[data-status="skipped"] #wifi-settings-form,
+.step[data-status="skipped"] #folder-controls {
+    display: none;
+}
+
 .inline-settings {
     display: flex;
     flex-direction: column;

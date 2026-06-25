@@ -28,7 +28,7 @@ ALL_STAGES: tuple[Stage, ...] = (
 
 # Stages the user can toggle off from the UI. The others are required.
 OPTIONAL_STAGES: frozenset[Stage] = frozenset(
-    {"change_password", "push_properties", "post_update"}
+    {"push_env", "change_password", "push_properties", "post_update"}
 )
 
 DeviceStatus = Literal["idle", "running", "success", "failed", "skipped"]
