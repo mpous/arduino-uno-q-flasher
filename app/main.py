@@ -156,24 +156,58 @@ async def devices() -> dict:
 
 
 # Blink the red user LED ~3s to physically identify the board on a bench full
-# of UNO Qs. We must (1) set the LED's trigger to `none` so kernel triggers
-# (heartbeat/timer/etc.) stop overriding manual brightness writes, and (2)
-# write `max_brightness` (typically 255) rather than `1`. Runs as the
-# `arduino` user via adb shell.
-IDENTIFY_BLINK_CMD = (
-    "LED=/sys/class/leds/red:user; "
-    "if [ ! -e \"$LED/brightness\" ]; then "
-    "  echo \"LED node $LED not found; checking alternatives:\"; "
-    "  ls /sys/class/leds/ 2>/dev/null; "
-    "  exit 1; "
-    "fi; "
-    "echo none | tee \"$LED/trigger\" >/dev/null 2>&1 || true; "
-    "MAX=$(cat \"$LED/max_brightness\" 2>/dev/null || echo 255); "
-    "for i in 1 2 3 4 5; do "
-    "  echo \"$MAX\" | tee \"$LED/brightness\" >/dev/null; sleep 0.3; "
-    "  echo 0 | tee \"$LED/brightness\" >/dev/null; sleep 0.3; "
-    "done"
-)
+# of UNO Qs. Runs over `adb shell` which on UNO Q is the `arduino` user (the
+# setup script asserts whoami == arduino).
+#
+# Two gotchas the original naive `echo 1 > brightness` hit:
+#  1) Linux LED-class nodes usually have an active `trigger` (heartbeat/timer/
+#     mmc...). Each manual brightness write is immediately overridden unless
+#     trigger is set to `none` first.
+#  2) Brightness must be `max_brightness` (typically 255), not literal 1.
+#
+# Different UNO Q image revisions name the LED differently — we probe a list
+# of likely paths. When none match, we dump enough diagnostic info that the
+# user (or a future agent) can spot the actual node name in the error reply.
+IDENTIFY_BLINK_CMD = r"""
+set +e
+echo "[identify] whoami: $(whoami)"
+echo "[identify] uname: $(uname -a 2>/dev/null)"
+echo "[identify] /sys/class/leds/ contents:"
+ls -la /sys/class/leds/ 2>&1 || echo "  (/sys/class/leds does not exist)"
+echo "[identify] candidate trigger files:"
+for f in /sys/class/leds/*/trigger; do
+  [ -e "$f" ] && echo "  $f"
+done 2>/dev/null
+
+for LED in \
+    /sys/class/leds/red:user \
+    /sys/class/leds/user:red \
+    /sys/class/leds/red \
+    /sys/class/leds/usr_red \
+    /sys/class/leds/pmic_red \
+    /sys/class/leds/led_red \
+    /sys/class/leds/red_led \
+    /sys/class/leds/user1 \
+    /sys/class/leds/usrled \
+    /sys/class/leds/heartbeat; do
+  if [ -e "$LED/brightness" ]; then
+    echo "[identify] using $LED"
+    echo none | tee "$LED/trigger" >/dev/null 2>&1 || true
+    MAX=$(cat "$LED/max_brightness" 2>/dev/null || echo 255)
+    echo "[identify] max_brightness=$MAX"
+    for i in 1 2 3 4 5; do
+      echo "$MAX" | tee "$LED/brightness" >/dev/null
+      sleep 0.3
+      echo 0 | tee "$LED/brightness" >/dev/null
+      sleep 0.3
+    done
+    exit 0
+  fi
+done
+
+echo "[identify] no known LED node matched. See listing above for the actual path on this image."
+exit 1
+"""
 
 
 @app.post("/api/devices/{serial}/identify")
@@ -183,10 +217,13 @@ async def identify_device(serial: str) -> dict:
     except adb.AdbNotFoundError as e:
         raise HTTPException(status_code=503, detail=str(e))
     if rc != 0:
+        # Surface the FULL output (not truncated) so the user can see the
+        # actual LED node names on their image.
         raise HTTPException(
-            status_code=502, detail=f"adb shell exited {rc}: {out[:200]}"
+            status_code=502,
+            detail=f"adb shell exited {rc}.\n{out}",
         )
-    return {"ok": True}
+    return {"ok": True, "output": out}
 
 
 @app.post("/api/upload")

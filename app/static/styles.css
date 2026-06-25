@@ -128,28 +128,22 @@ html, body {
     font-size: 12.5px;
 }
 
-/* ===== settings panel ===== */
+/* ===== inline WiFi settings (lives inside Step 1) ===== */
 
-.settings-panel {
-    background: var(--surface);
-    border-bottom: 1px solid var(--border);
-    padding: 18px 28px;
+.inline-settings {
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    gap: 10px;
+    padding: 12px;
+    background: var(--surface-muted);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
 }
 
-.settings-row {
-    display: flex;
-    gap: 18px;
-    align-items: center;
-    flex-wrap: wrap;
-}
-
-.settings-row label {
+.inline-setting {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 4px;
     font-size: 11px;
     font-weight: 500;
     text-transform: uppercase;
@@ -157,23 +151,39 @@ html, body {
     color: var(--text-muted);
 }
 
-.settings-row input[type="text"],
-.settings-row input[type="password"] {
+.inline-setting em {
+    font-style: normal;
+    color: var(--text-faint);
+    text-transform: none;
+    letter-spacing: 0;
+    font-weight: 400;
+    margin-left: 2px;
+}
+
+.inline-setting input {
     background: var(--surface);
     border: 1px solid var(--border-strong);
     color: var(--text);
-    padding: 8px 12px;
+    padding: 7px 10px;
     border-radius: var(--radius-sm);
     font-size: 13px;
-    min-width: 220px;
+    width: 100%;
+    text-transform: none;
+    letter-spacing: normal;
     transition: border-color 0.15s, box-shadow 0.15s;
 }
 
-.settings-row input[type="text"]:focus,
-.settings-row input[type="password"]:focus {
+.inline-setting input:focus {
     outline: none;
     border-color: var(--accent);
     box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.inline-settings-actions {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
 }
 
 /* ===== 3-step header ===== */

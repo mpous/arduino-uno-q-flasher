@@ -20,28 +20,6 @@
         <div id="health" class="health">checking...</div>
     </header>
 
-    <section id="settings-panel" class="settings-panel" hidden>
-        <div class="settings-row">
-            <label>
-                WiFi SSID
-                <input type="text" id="setting-ssid" placeholder="MyNetwork" />
-            </label>
-            <label>
-                WiFi password
-                <input type="password" id="setting-wifi-pw" placeholder="••••••••" />
-            </label>
-            <label>
-                Default device password (optional)
-                <input type="password" id="setting-device-pw" placeholder="••••••••" />
-            </label>
-        </div>
-        <div class="settings-row">
-            <button id="save-settings-btn" class="btn btn-primary">Save</button>
-            <button id="close-settings-btn" class="btn">Close</button>
-            <span id="settings-status" class="muted"></span>
-        </div>
-    </section>
-
     <section class="steps">
         <div class="step" id="step-wifi" data-status="pending">
             <div class="step-header">
@@ -53,6 +31,26 @@
             </div>
             <div class="step-body">
                 <button id="open-settings-btn" class="btn">Configure</button>
+
+                <div id="wifi-settings-form" class="inline-settings" hidden>
+                    <label class="inline-setting">
+                        <span>WiFi SSID</span>
+                        <input type="text" id="setting-ssid" placeholder="MyNetwork" />
+                    </label>
+                    <label class="inline-setting">
+                        <span>WiFi password</span>
+                        <input type="password" id="setting-wifi-pw" placeholder="••••••••" />
+                    </label>
+                    <label class="inline-setting">
+                        <span>Default device password <em>(optional)</em></span>
+                        <input type="password" id="setting-device-pw" placeholder="••••••••" />
+                    </label>
+                    <div class="inline-settings-actions">
+                        <button id="save-settings-btn" class="btn btn-primary btn-small">Save</button>
+                        <button id="close-settings-btn" class="btn btn-small">Cancel</button>
+                        <span id="settings-status" class="muted"></span>
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -62,7 +60,7 @@
             <div class="step-header">
                 <div class="step-number">2</div>
                 <div class="step-title">
-                    <div class="step-name">App folder <span class="step-name-suffix">(optional)</span></div>
+                    <div class="step-name">App configuration <span class="step-name-suffix">(optional)</span></div>
                     <div class="step-state" id="step-folder-state">none</div>
                 </div>
             </div>
@@ -75,6 +73,15 @@
                     <div class="eim-info-header">.eim models</div>
                     <ul id="eim-list"></ul>
                 </div>
+                <label class="post-update-label">
+                    Post-update command (run after setup)
+                    <input
+                        type="text"
+                        id="post-update-cmd"
+                        placeholder="leave empty to skip"
+                        value="app start examples:real-time-accelerometer"
+                    />
+                </label>
             </div>
         </div>
 
@@ -94,15 +101,6 @@
                     <button id="update-btn" class="btn btn-secondary" disabled>Update all</button>
                 </div>
                 <button id="refresh-btn" class="btn btn-ghost btn-small">⟳ Refresh devices</button>
-                <label class="post-update-label">
-                    Post-update command (runs after setup)
-                    <input
-                        type="text"
-                        id="post-update-cmd"
-                        placeholder="leave empty to skip"
-                        value="app start examples:real-time-accelerometer"
-                    />
-                </label>
                 <div id="wifi-inline-notice" class="inline-notice" hidden>
                     <span>⚠ WiFi credentials needed before running.</span>
                     <button id="wifi-inline-configure" class="btn-link">Configure</button>

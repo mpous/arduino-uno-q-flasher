@@ -59,9 +59,7 @@ function wireControls() {
     $("#start-btn").addEventListener("click", () => startRun("start"));
     $("#update-btn").addEventListener("click", () => startRun("update"));
     $("#open-settings-btn").addEventListener("click", openSettings);
-    $("#close-settings-btn").addEventListener("click", () => {
-        $("#settings-panel").hidden = true;
-    });
+    $("#close-settings-btn").addEventListener("click", closeSettings);
     $("#save-settings-btn").addEventListener("click", saveSettings);
     $("#wifi-inline-configure").addEventListener("click", openSettings);
 }
@@ -116,17 +114,28 @@ function renderWifiStep(health) {
 // ---------- settings panel ----------
 
 async function openSettings() {
-    const panel = $("#settings-panel");
-    panel.hidden = false;
+    const form = $("#wifi-settings-form");
+    form.hidden = false;
+    $("#open-settings-btn").hidden = true;
     try {
         const r = await fetch("/api/settings");
         const j = await r.json();
         $("#setting-ssid").value = j.UNOQ_WIFI_SSID || "";
         $("#setting-wifi-pw").placeholder = j.UNOQ_WIFI_PASSWORD_set ? "(set — leave blank to keep)" : "••••••••";
         $("#setting-device-pw").placeholder = j.UNOQ_DEFAULT_PASSWORD_set ? "(set — leave blank to keep)" : "••••••••";
+        // Autofocus the first empty input for fast typing.
+        const focusTarget = !$("#setting-ssid").value
+            ? $("#setting-ssid") : $("#setting-wifi-pw");
+        focusTarget.focus();
     } catch (e) {
         $("#settings-status").textContent = `load failed: ${e}`;
     }
+}
+
+function closeSettings() {
+    $("#wifi-settings-form").hidden = true;
+    $("#open-settings-btn").hidden = false;
+    $("#settings-status").textContent = "";
 }
 
 async function saveSettings() {
@@ -152,10 +161,14 @@ async function saveSettings() {
             $("#settings-status").textContent = `save failed: ${j.detail || r.status}`;
             return;
         }
-        $("#settings-status").textContent = "saved";
+        $("#settings-status").textContent = "saved ✓";
         $("#setting-wifi-pw").value = "";
         $("#setting-device-pw").value = "";
         await refreshHealth();
+        // Auto-close once everything is configured.
+        if (state.wifiOk) {
+            setTimeout(closeSettings, 600);
+        }
     } catch (e) {
         $("#settings-status").textContent = `save error: ${e}`;
     }
