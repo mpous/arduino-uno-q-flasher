@@ -20,11 +20,6 @@
         <div id="health" class="health">checking...</div>
     </header>
 
-    <div id="wifi-banner" class="banner banner-bad" hidden>
-        <span id="wifi-banner-text">WiFi credentials missing — flashes will fail.</span>
-        <button id="open-settings-btn" class="btn btn-small">Configure</button>
-    </div>
-
     <section id="settings-panel" class="settings-panel" hidden>
         <div class="settings-row">
             <label>
@@ -41,46 +36,89 @@
             </label>
         </div>
         <div class="settings-row">
-            <button id="save-settings-btn" class="btn btn-primary">Save to .env</button>
+            <button id="save-settings-btn" class="btn btn-primary">Save</button>
             <button id="close-settings-btn" class="btn">Close</button>
-            <span id="settings-status" class="folder-info"></span>
+            <span id="settings-status" class="muted"></span>
         </div>
     </section>
 
-    <section class="controls">
-        <div class="control-row">
-            <label class="file-picker">
-                <input type="file" id="folder-input" webkitdirectory directory multiple />
-                <span class="btn">Choose app folder</span>
-            </label>
-            <span id="folder-info" class="folder-info">no folder selected (optional — Start All still runs setup + post-update)</span>
-            <div id="eim-info" class="eim-info" hidden>
-                <div class="eim-info-header">.eim model files in this folder:</div>
-                <ul id="eim-list"></ul>
+    <section class="steps">
+        <div class="step" id="step-wifi" data-status="pending">
+            <div class="step-header">
+                <div class="step-number">1</div>
+                <div class="step-title">
+                    <div class="step-name">WiFi credentials</div>
+                    <div class="step-state" id="step-wifi-state">not configured</div>
+                </div>
+            </div>
+            <div class="step-body">
+                <button id="open-settings-btn" class="btn">Configure</button>
             </div>
         </div>
 
-        <div class="control-row">
-            <label class="post-update-label">
-                Post-update command (runs on each device after setup)
-                <input
-                    type="text"
-                    id="post-update-cmd"
-                    placeholder="leave empty to skip"
-                    value="app start examples:real-time-accelerometer"
-                />
-            </label>
+        <div class="step-arrow">→</div>
+
+        <div class="step" id="step-folder" data-status="optional">
+            <div class="step-header">
+                <div class="step-number">2</div>
+                <div class="step-title">
+                    <div class="step-name">App folder <span class="step-name-suffix">(optional)</span></div>
+                    <div class="step-state" id="step-folder-state">none</div>
+                </div>
+            </div>
+            <div class="step-body">
+                <label class="file-picker">
+                    <input type="file" id="folder-input" webkitdirectory directory multiple />
+                    <span class="btn">Choose folder</span>
+                </label>
+                <div id="eim-info" class="eim-info" hidden>
+                    <div class="eim-info-header">.eim models</div>
+                    <ul id="eim-list"></ul>
+                </div>
+            </div>
         </div>
 
-        <div class="control-row">
-            <button id="refresh-btn" class="btn">Refresh devices</button>
-            <span id="device-count" class="folder-info">0 devices detected</span>
-        </div>
+        <div class="step-arrow">→</div>
 
-        <div class="control-row">
-            <button id="start-btn" class="btn btn-primary" disabled>Start all</button>
-            <button id="retry-failed-btn" class="btn" disabled>Retry failed</button>
-            <span id="run-status" class="folder-info"></span>
+        <div class="step" id="step-run" data-status="pending">
+            <div class="step-header">
+                <div class="step-number">3</div>
+                <div class="step-title">
+                    <div class="step-name">Run</div>
+                    <div class="step-state" id="step-run-state">0 boards ready</div>
+                </div>
+            </div>
+            <div class="step-body">
+                <div class="step-actions">
+                    <button id="start-btn" class="btn btn-primary" disabled>Start all</button>
+                    <button id="update-btn" class="btn btn-secondary" disabled>Update all</button>
+                </div>
+                <button id="refresh-btn" class="btn btn-ghost btn-small">⟳ Refresh devices</button>
+                <label class="post-update-label">
+                    Post-update command (runs after setup)
+                    <input
+                        type="text"
+                        id="post-update-cmd"
+                        placeholder="leave empty to skip"
+                        value="app start examples:real-time-accelerometer"
+                    />
+                </label>
+                <div id="wifi-inline-notice" class="inline-notice" hidden>
+                    <span>⚠ WiFi credentials needed before running.</span>
+                    <button id="wifi-inline-configure" class="btn-link">Configure</button>
+                </div>
+                <div id="run-status" class="muted"></div>
+            </div>
+        </div>
+    </section>
+
+    <section id="run-progress-bar" class="run-progress" hidden>
+        <div class="run-progress-header">
+            <span id="run-progress-label">Running…</span>
+            <span id="run-progress-counts" class="muted">0/0</span>
+        </div>
+        <div class="run-progress-track">
+            <div id="run-progress-fill" class="run-progress-fill"></div>
         </div>
     </section>
 

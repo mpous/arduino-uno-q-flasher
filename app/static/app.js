@@ -12,16 +12,30 @@ const STAGES = [
     "post_update",
 ];
 
+// Stages Update All skips: everything except push_setup_script, push_env,
+// chmod_script, run_setup. The user wants Update All to "just rerun the
+// setup script" (no app push, no password change, no properties, no post).
+const UPDATE_SKIP_STAGES = [
+    "change_password",
+    "push_properties",
+    "post_update",
+];
+
 const DEVICE_POLL_MS = 5000;
 
 const state = {
-    upload: null,        // { upload_id, folder_name, file_count }
-    folderFiles: null,   // FileList from the picker
-    devices: [],         // [{ serial, state }]
-    cards: new Map(),    // serial -> { card, logEl, progressEl, stageEl, badgeEl, retryBtn, skipInputs }
+    upload: null,         // { upload_id, folder_name, file_count, eim_files }
+    folderFiles: null,    // FileList from the picker
+    devices: [],          // [{ serial, state }]
+    cards: new Map(),     // serial -> { ...refs }
     runId: null,
     ws: null,
     wifiOk: false,
+
+    // run-progress aggregate
+    runTotal: 0,
+    runCompleted: 0,
+    runMode: null,        // 'start' | 'update'
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -30,11 +44,29 @@ const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 // ---------- bootstrap ----------
 
 async function init() {
+    wireControls();
     await refreshHealth();
     await refreshDevices();
-    wireControls();
     setInterval(refreshDevices, DEVICE_POLL_MS);
 }
+
+function wireControls() {
+    $("#folder-input").addEventListener("change", onFolderPicked);
+    $("#refresh-btn").addEventListener("click", () => {
+        refreshHealth();
+        refreshDevices();
+    });
+    $("#start-btn").addEventListener("click", () => startRun("start"));
+    $("#update-btn").addEventListener("click", () => startRun("update"));
+    $("#open-settings-btn").addEventListener("click", openSettings);
+    $("#close-settings-btn").addEventListener("click", () => {
+        $("#settings-panel").hidden = true;
+    });
+    $("#save-settings-btn").addEventListener("click", saveSettings);
+    $("#wifi-inline-configure").addEventListener("click", openSettings);
+}
+
+// ---------- health & WiFi step ----------
 
 async function refreshHealth() {
     try {
@@ -50,8 +82,8 @@ async function refreshHealth() {
             el.textContent = `ADB ready · ${pw}`;
         }
         state.wifiOk = j.wifi_ssid_configured && j.wifi_password_configured;
-        renderWifiBanner(j);
-        updateStartButton();
+        renderWifiStep(j);
+        updateStartButtons();
     } catch (e) {
         const el = $("#health");
         el.className = "health bad";
@@ -59,105 +91,29 @@ async function refreshHealth() {
     }
 }
 
-function renderWifiBanner(health) {
-    const banner = $("#wifi-banner");
-    const text = $("#wifi-banner-text");
-    if (!health.wifi_ssid_configured && !health.wifi_password_configured) {
-        text.textContent = "WiFi SSID and password not set — devices will fail at setup.";
-        banner.hidden = false;
-    } else if (!health.wifi_ssid_configured) {
-        text.textContent = "WiFi SSID not set — devices will fail at setup.";
-        banner.hidden = false;
-    } else if (!health.wifi_password_configured) {
-        text.textContent = "WiFi password not set — devices will fail at setup.";
-        banner.hidden = false;
+function renderWifiStep(health) {
+    const step = $("#step-wifi");
+    const stateEl = $("#step-wifi-state");
+    const ssidSet = health.wifi_ssid_configured;
+    const pwSet = health.wifi_password_configured;
+    if (ssidSet && pwSet) {
+        step.dataset.status = "configured";
+        stateEl.textContent = "✓ configured";
+    } else if (!ssidSet && !pwSet) {
+        step.dataset.status = "warning";
+        stateEl.textContent = "SSID + password needed";
+    } else if (!ssidSet) {
+        step.dataset.status = "warning";
+        stateEl.textContent = "SSID needed";
     } else {
-        banner.hidden = true;
+        step.dataset.status = "warning";
+        stateEl.textContent = "password needed";
     }
+    // Inline notice (lives in step 3, near the action buttons).
+    $("#wifi-inline-notice").hidden = state.wifiOk;
 }
 
-async function refreshDevices() {
-    try {
-        const r = await fetch("/api/devices");
-        if (!r.ok) {
-            const j = await r.json().catch(() => ({}));
-            $("#device-count").textContent = j.detail || `error: ${r.status}`;
-            return;
-        }
-        const j = await r.json();
-        state.devices = j.devices;
-        renderDeviceGrid();
-        $("#device-count").textContent = `${state.devices.length} device(s) detected`;
-        updateStartButton();
-    } catch (e) {
-        $("#device-count").textContent = "error fetching devices";
-    }
-}
-
-function renderDeviceGrid() {
-    const grid = $("#devices-grid");
-    const tpl = $("#device-card-template");
-    const seen = new Set();
-    const runActive = state.runId !== null;
-
-    for (const d of state.devices) {
-        seen.add(d.serial);
-        if (state.cards.has(d.serial)) continue;  // keep existing card + logs
-
-        const node = tpl.content.firstElementChild.cloneNode(true);
-        node.dataset.serial = d.serial;
-        node.querySelector(".device-serial").textContent = d.serial;
-
-        const badgeEl = node.querySelector(".status-badge");
-        const progressEl = node.querySelector(".progress-fill");
-        const stageEl = node.querySelector(".current-stage");
-        const logEl = node.querySelector(".log-panel");
-        const retryBtn = node.querySelector(".retry-btn");
-        const identifyBtn = node.querySelector(".identify-btn");
-        const elapsedEl = node.querySelector(".elapsed");
-        const failureEl = node.querySelector(".failure-reason");
-        const summaryEl = node.querySelector(".summary-panel");
-        const skipInputs = Array.from(node.querySelectorAll(".skip-toggle"));
-
-        retryBtn.addEventListener("click", () => retryDevice(d.serial));
-        identifyBtn.addEventListener("click", () => identifyDevice(d.serial));
-
-        grid.appendChild(node);
-        state.cards.set(d.serial, {
-            card: node, badgeEl, progressEl, stageEl, logEl, retryBtn, identifyBtn,
-            elapsedEl, failureEl, summaryEl, skipInputs,
-        });
-    }
-
-    // Remove cards for devices that disappeared — but only when idle. Mid-run
-    // we keep them visible (with their logs) even if adb briefly drops them.
-    if (!runActive) {
-        for (const serial of Array.from(state.cards.keys())) {
-            if (!seen.has(serial)) {
-                const c = state.cards.get(serial);
-                c.card.remove();
-                state.cards.delete(serial);
-            }
-        }
-    }
-}
-
-// ---------- controls ----------
-
-function wireControls() {
-    $("#folder-input").addEventListener("change", onFolderPicked);
-    $("#refresh-btn").addEventListener("click", () => {
-        refreshHealth();
-        refreshDevices();
-    });
-    $("#start-btn").addEventListener("click", startRun);
-    $("#retry-failed-btn").addEventListener("click", retryAllFailed);
-    $("#open-settings-btn").addEventListener("click", openSettings);
-    $("#close-settings-btn").addEventListener("click", () => {
-        $("#settings-panel").hidden = true;
-    });
-    $("#save-settings-btn").addEventListener("click", saveSettings);
-}
+// ---------- settings panel ----------
 
 async function openSettings() {
     const panel = $("#settings-panel");
@@ -178,7 +134,6 @@ async function saveSettings() {
     const ssid = $("#setting-ssid").value;
     const wifiPw = $("#setting-wifi-pw").value;
     const devPw = $("#setting-device-pw").value;
-    // Only send non-empty values; empty means "don't touch".
     if (ssid !== "") body.UNOQ_WIFI_SSID = ssid;
     if (wifiPw !== "") body.UNOQ_WIFI_PASSWORD = wifiPw;
     if (devPw !== "") body.UNOQ_DEFAULT_PASSWORD = devPw;
@@ -206,13 +161,80 @@ async function saveSettings() {
     }
 }
 
+// ---------- devices ----------
+
+async function refreshDevices() {
+    try {
+        const r = await fetch("/api/devices");
+        if (!r.ok) {
+            const j = await r.json().catch(() => ({}));
+            updateRunStepState(j.detail || `error: ${r.status}`);
+            return;
+        }
+        const j = await r.json();
+        state.devices = j.devices;
+        renderDeviceGrid();
+        updateStartButtons();
+    } catch (e) {
+        updateRunStepState("error fetching devices");
+    }
+}
+
+function renderDeviceGrid() {
+    const grid = $("#devices-grid");
+    const tpl = $("#device-card-template");
+    const seen = new Set();
+    const runActive = state.runId !== null;
+
+    for (const d of state.devices) {
+        seen.add(d.serial);
+        if (state.cards.has(d.serial)) continue;
+
+        const node = tpl.content.firstElementChild.cloneNode(true);
+        node.dataset.serial = d.serial;
+        node.querySelector(".device-serial").textContent = d.serial;
+
+        const badgeEl = node.querySelector(".status-badge");
+        const progressEl = node.querySelector(".progress-fill");
+        const stageEl = node.querySelector(".current-stage");
+        const logEl = node.querySelector(".log-panel");
+        const retryBtn = node.querySelector(".retry-btn");
+        const identifyBtn = node.querySelector(".identify-btn");
+        const elapsedEl = node.querySelector(".elapsed");
+        const failureEl = node.querySelector(".failure-reason");
+        const summaryEl = node.querySelector(".summary-panel");
+        const skipInputs = Array.from(node.querySelectorAll(".skip-toggle"));
+
+        retryBtn.addEventListener("click", () => retryDevice(d.serial));
+        identifyBtn.addEventListener("click", () => identifyDevice(d.serial));
+
+        grid.appendChild(node);
+        state.cards.set(d.serial, {
+            card: node, badgeEl, progressEl, stageEl, logEl, retryBtn, identifyBtn,
+            elapsedEl, failureEl, summaryEl, skipInputs,
+        });
+    }
+
+    if (!runActive) {
+        for (const serial of Array.from(state.cards.keys())) {
+            if (!seen.has(serial)) {
+                const c = state.cards.get(serial);
+                c.card.remove();
+                state.cards.delete(serial);
+            }
+        }
+    }
+}
+
+// ---------- folder picker (Step 2) ----------
+
 async function onFolderPicked(e) {
     const files = e.target.files;
     if (!files || files.length === 0) return;
     state.folderFiles = files;
     const rootName = (files[0].webkitRelativePath || files[0].name).split("/")[0];
-    $("#folder-info").textContent = `${rootName} — uploading ${files.length} files…`;
-    renderEimList(null);  // hide while uploading
+    updateFolderStep("uploading", `${rootName} — uploading ${files.length} files…`);
+    renderEimList(null);
 
     const fd = new FormData();
     fd.append("folder_name", rootName);
@@ -224,36 +246,45 @@ async function onFolderPicked(e) {
         const r = await fetch("/api/upload", { method: "POST", body: fd });
         if (!r.ok) {
             const j = await r.json().catch(() => ({}));
-            $("#folder-info").textContent = `upload failed: ${j.detail || r.status}`;
+            updateFolderStep("error", `upload failed: ${j.detail || r.status}`);
             return;
         }
         const j = await r.json();
         state.upload = j;
         const mb = approxSize(files);
-        $("#folder-info").textContent = `${j.folder_name} · ${j.file_count} files · ${mb}`;
+        const summary = `${j.folder_name} · ${j.file_count} files · ${mb}`;
+        updateFolderStep("configured", summary);
         renderEimList(j.eim_files || []);
-        updateStartButton();
+        updateStartButtons();
     } catch (err) {
-        $("#folder-info").textContent = `upload error: ${err}`;
+        updateFolderStep("error", `upload error: ${err}`);
     }
+}
+
+function updateFolderStep(status, text) {
+    const step = $("#step-folder");
+    if (status === "configured") step.dataset.status = "configured";
+    else if (status === "error") step.dataset.status = "warning";
+    else step.dataset.status = "optional";
+    $("#step-folder-state").textContent = text;
 }
 
 function renderEimList(eimFiles) {
     const wrap = $("#eim-info");
     const ul = $("#eim-list");
     ul.innerHTML = "";
-    if (eimFiles == null) {
-        wrap.hidden = true;
+    if (eimFiles == null || eimFiles.length === 0) {
+        wrap.hidden = eimFiles == null;
+        if (eimFiles && eimFiles.length === 0) {
+            wrap.hidden = false;
+            const li = document.createElement("li");
+            li.className = "eim-empty";
+            li.textContent = "no .eim files";
+            ul.appendChild(li);
+        }
         return;
     }
     wrap.hidden = false;
-    if (eimFiles.length === 0) {
-        const li = document.createElement("li");
-        li.className = "eim-empty";
-        li.textContent = "no .eim files found in this folder";
-        ul.appendChild(li);
-        return;
-    }
     for (const e of eimFiles) {
         const li = document.createElement("li");
         const name = document.createElement("span");
@@ -277,39 +308,93 @@ function formatBytes(n) {
 function approxSize(files) {
     let total = 0;
     for (const f of files) total += f.size;
-    if (total < 1024) return `${total} B`;
-    if (total < 1024 * 1024) return `${(total / 1024).toFixed(1)} KB`;
-    return `${(total / (1024 * 1024)).toFixed(1)} MB`;
+    return formatBytes(total);
 }
 
-function updateStartButton() {
-    const ready =
-        state.devices.length > 0 &&
-        state.runId === null &&
-        state.wifiOk;
-    $("#start-btn").disabled = !ready;
-    let title = "";
-    if (!state.wifiOk) title = "Configure WiFi credentials first";
-    else if (state.devices.length === 0) title = "Connect at least one UNO Q";
-    else if (!state.upload) title = "No app folder selected — will run setup + post-update only";
-    $("#start-btn").title = title;
+// ---------- Step 3: run buttons ----------
+
+function updateStartButtons() {
+    const haveDevices = state.devices.length > 0;
+    const haveFolder = !!state.upload;
+    const idle = state.runId === null;
+    const startReady = haveDevices && state.wifiOk && haveFolder && idle;
+    const updateReady = haveDevices && state.wifiOk && idle;
+
+    $("#start-btn").disabled = !startReady;
+    $("#update-btn").disabled = !updateReady;
+
+    // Tooltips spell out exactly what's missing.
+    $("#start-btn").title = startReady
+        ? "Flash app to all boards and run setup + post-update"
+        : missingFor("start", haveDevices, state.wifiOk, haveFolder, idle);
+    $("#update-btn").title = updateReady
+        ? "Re-run setup script on all boards (no app push)"
+        : missingFor("update", haveDevices, state.wifiOk, true, idle);
+
+    updateRunStepState();
+}
+
+function missingFor(kind, haveDevices, wifiOk, haveFolder, idle) {
+    if (!idle) return "A run is already in progress";
+    const missing = [];
+    if (!haveDevices) missing.push("connect at least one UNO Q");
+    if (!wifiOk) missing.push("configure WiFi credentials");
+    if (kind === "start" && !haveFolder) missing.push("choose an app folder");
+    return missing.length ? "Needed: " + missing.join(", ") : "";
+}
+
+function updateRunStepState(override) {
+    const step = $("#step-run");
+    const stateEl = $("#step-run-state");
+    if (override) {
+        stateEl.textContent = override;
+        step.dataset.status = "warning";
+        return;
+    }
+    const n = state.devices.length;
+    if (state.runId !== null) {
+        step.dataset.status = "ready";
+        stateEl.textContent = `running on ${state.runTotal} board${state.runTotal === 1 ? "" : "s"}`;
+        return;
+    }
+    if (n === 0) {
+        step.dataset.status = "pending";
+        stateEl.textContent = "no boards detected";
+        return;
+    }
+    const ready = state.wifiOk;
+    step.dataset.status = ready ? "ready" : "pending";
+    const folderPart = state.upload
+        ? `folder: ${state.upload.folder_name}`
+        : "no folder";
+    stateEl.textContent = `${n} board${n === 1 ? "" : "s"} · ${folderPart}`;
 }
 
 // ---------- runs ----------
 
-async function startRun() {
+async function startRun(mode /* 'start' | 'update' */) {
     if (state.devices.length === 0) return;
+    state.runMode = mode;
+
+    const baseSkip = mode === "update" ? UPDATE_SKIP_STAGES : [];
     const devices = state.devices.map((d) => {
-        const skip = collectSkip(d.serial);
+        const userSkip = collectSkip(d.serial);
+        const skip = Array.from(new Set([...baseSkip, ...userSkip]));
         return { serial: d.serial, skip_stages: skip };
     });
-    const postUpdateCmd = ($("#post-update-cmd").value || "").trim();
+    const postUpdateCmd = mode === "update"
+        ? ""  // skip post-update for "update only" runs
+        : ($("#post-update-cmd").value || "").trim();
+
     resetAllCards();
+    showRunProgress(state.devices.length, mode);
+
     const r = await fetch("/api/runs", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-            upload_id: state.upload ? state.upload.upload_id : null,
+            upload_id: mode === "update" ? null
+                : (state.upload ? state.upload.upload_id : null),
             devices,
             post_update_cmd: postUpdateCmd || null,
         }),
@@ -317,13 +402,14 @@ async function startRun() {
     if (!r.ok) {
         const j = await r.json().catch(() => ({}));
         $("#run-status").textContent = `start failed: ${j.detail || r.status}`;
+        hideRunProgress();
         return;
     }
     const j = await r.json();
     state.runId = j.run_id;
-    $("#run-status").textContent = `run ${j.run_id} in progress…`;
-    $("#start-btn").disabled = true;
-    $("#retry-failed-btn").disabled = true;
+    $("#run-status").textContent =
+        `${mode === "update" ? "Update" : "Run"} ${j.run_id} in progress…`;
+    updateStartButtons();
     openWs(j.run_id);
 }
 
@@ -336,6 +422,11 @@ function collectSkip(serial) {
 async function retryDevice(serial) {
     if (!state.runId) return;
     const skip = collectSkip(serial);
+    if (state.runMode === "update") {
+        for (const s of UPDATE_SKIP_STAGES) {
+            if (!skip.includes(s)) skip.push(s);
+        }
+    }
     resetCard(serial);
     const r = await fetch(`/api/runs/${state.runId}/devices/${serial}/retry`, {
         method: "POST",
@@ -345,15 +436,6 @@ async function retryDevice(serial) {
     if (!r.ok) {
         const j = await r.json().catch(() => ({}));
         appendLog(serial, `retry failed: ${j.detail || r.status}`, "err");
-    }
-}
-
-async function retryAllFailed() {
-    if (!state.runId) return;
-    for (const [serial, card] of state.cards) {
-        if (card.badgeEl.dataset.status === "failed") {
-            await retryDevice(serial);
-        }
     }
 }
 
@@ -380,6 +462,33 @@ async function identifyDevice(serial) {
     }
 }
 
+// ---------- aggregate progress bar ----------
+
+function showRunProgress(total, mode) {
+    state.runTotal = total;
+    state.runCompleted = 0;
+    $("#run-progress-bar").hidden = false;
+    $("#run-progress-label").textContent =
+        mode === "update" ? "Updating boards…" : "Flashing boards…";
+    $("#run-progress-counts").textContent = `0/${total}`;
+    $("#run-progress-fill").style.width = "0%";
+}
+
+function bumpRunProgress() {
+    state.runCompleted += 1;
+    const pct = state.runTotal === 0 ? 0
+        : (state.runCompleted / state.runTotal) * 100;
+    $("#run-progress-fill").style.width = `${pct}%`;
+    $("#run-progress-counts").textContent =
+        `${state.runCompleted}/${state.runTotal}`;
+}
+
+function hideRunProgress() {
+    setTimeout(() => {
+        $("#run-progress-bar").hidden = true;
+    }, 2500);
+}
+
 // ---------- WebSocket ----------
 
 function openWs(runId) {
@@ -393,19 +502,11 @@ function openWs(runId) {
     };
     ws.onclose = () => {
         $("#run-status").textContent = `run ${runId} finished`;
-        updateStartButton();
-        $("#retry-failed-btn").disabled = !anyFailed();
+        state.runId = null;
+        updateStartButtons();
+        hideRunProgress();
     };
-    ws.onerror = () => {
-        appendGlobal("ws error", "err");
-    };
-}
-
-function anyFailed() {
-    for (const [, c] of state.cards) {
-        if (c.badgeEl.dataset.status === "failed") return true;
-    }
-    return false;
+    ws.onerror = () => console.log("ws error");
 }
 
 function handleEvent(ev) {
@@ -477,13 +578,15 @@ function handleEvent(ev) {
             } else {
                 c.progressEl.style.width = "100%";
             }
+            bumpRunProgress();
             break;
         }
         case "run_finished": {
             $("#run-status").textContent =
                 `done · ${ev.successful.length} ok, ${ev.failed.length} failed`;
-            $("#retry-failed-btn").disabled = ev.failed.length === 0;
-            $("#start-btn").disabled = false;
+            state.runId = null;
+            updateStartButtons();
+            hideRunProgress();
             break;
         }
     }
@@ -501,10 +604,6 @@ function appendLog(serial, line, cls = "") {
     span.textContent = line + "\n";
     c.logEl.appendChild(span);
     c.logEl.scrollTop = c.logEl.scrollHeight;
-}
-
-function appendGlobal(line, cls = "") {
-    console.log(line);
 }
 
 function resetAllCards() {
