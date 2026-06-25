@@ -4,6 +4,9 @@ A web app that flashes multiple Arduino UNO Q boards in parallel over `adb`,
 with live per-device logs and real-time status. Replaces the original
 `unoq-flash-all.sh` bash workflow.
 
+<img width="800" alt="Arduino UNO Q flasher UI" src="https://github.com/user-attachments/assets/f795a71a-c1b4-4a7b-a440-304114787171" />
+
+
 ## Prerequisites
 
 - **Python 3.11+**
