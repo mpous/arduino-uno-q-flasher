@@ -55,7 +55,7 @@ class FlasherContext:
 
     def __init__(
         self,
-        app_folder: Path,
+        app_folder: Path | None,
         setup_script: Path,
         env_file: Path | None,
         unoq_default_password: str | None,
@@ -71,9 +71,10 @@ class FlasherContext:
 
     @property
     def properties_file(self) -> Path | None:
-        candidate = self.app_folder / PROPERTIES_FILE_NAME
-        if candidate.is_file():
-            return candidate
+        if self.app_folder is not None:
+            candidate = self.app_folder / PROPERTIES_FILE_NAME
+            if candidate.is_file():
+                return candidate
         candidate2 = self.project_root / PROPERTIES_FILE_NAME
         if candidate2.is_file():
             return candidate2
@@ -153,14 +154,22 @@ async def flash_device(
         await emit(StageEvent(device=serial, stage=stage, status="failed"))
         return not required
 
-    # 1. push app folder
-    async def stage_push_app() -> bool:
-        cb = await line_cb_for("push_app")
-        rc, _ = await adb.push(serial, ctx.app_folder, APPS_TARGET_DIR, cb)
-        return rc == 0
+    # 1. push app folder (skipped silently if no folder was provided — useful
+    # for "maintenance" runs that only update WiFi / system / post-update).
+    if ctx.app_folder is None:
+        await emit(StageEvent(device=serial, stage="push_app", status="skipped"))
+        await log(
+            "No app folder selected; skipping app push.",
+            stage="push_app",
+        )
+    else:
+        async def stage_push_app() -> bool:
+            cb = await line_cb_for("push_app")
+            rc, _ = await adb.push(serial, ctx.app_folder, APPS_TARGET_DIR, cb)
+            return rc == 0
 
-    if not await run_stage("push_app", stage_push_app, required=True):
-        return await fail("Failed to push app folder.")
+        if not await run_stage("push_app", stage_push_app, required=True):
+            return await fail("Failed to push app folder.")
 
     # 2. push setup script
     async def stage_push_script() -> bool:

@@ -8,7 +8,15 @@
 </head>
 <body>
     <header class="topbar">
-        <h1>Arduino UNO Q Flasher</h1>
+        <div class="topbar-left">
+            <img
+                class="brand-logo"
+                src="/static/edge-impulse-logo.svg"
+                alt="Edge Impulse"
+            />
+            <div class="brand-divider"></div>
+            <h1>Arduino UNO Q Flasher<span class="subtitle">— bulk setup over ADB</span></h1>
+        </div>
         <div id="health" class="health">checking...</div>
     </header>
 
@@ -45,7 +53,7 @@
                 <input type="file" id="folder-input" webkitdirectory directory multiple />
                 <span class="btn">Choose app folder</span>
             </label>
-            <span id="folder-info" class="folder-info">no folder selected</span>
+            <span id="folder-info" class="folder-info">no folder selected (optional — Start All still runs setup + post-update)</span>
             <div id="eim-info" class="eim-info" hidden>
                 <div class="eim-info-header">.eim model files in this folder:</div>
                 <ul id="eim-list"></ul>

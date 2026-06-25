@@ -284,20 +284,21 @@ function approxSize(files) {
 
 function updateStartButton() {
     const ready =
-        state.upload &&
         state.devices.length > 0 &&
         state.runId === null &&
         state.wifiOk;
     $("#start-btn").disabled = !ready;
-    $("#start-btn").title = !state.wifiOk
-        ? "Configure WiFi credentials first"
-        : "";
+    let title = "";
+    if (!state.wifiOk) title = "Configure WiFi credentials first";
+    else if (state.devices.length === 0) title = "Connect at least one UNO Q";
+    else if (!state.upload) title = "No app folder selected — will run setup + post-update only";
+    $("#start-btn").title = title;
 }
 
 // ---------- runs ----------
 
 async function startRun() {
-    if (!state.upload || state.devices.length === 0) return;
+    if (state.devices.length === 0) return;
     const devices = state.devices.map((d) => {
         const skip = collectSkip(d.serial);
         return { serial: d.serial, skip_stages: skip };
@@ -308,7 +309,7 @@ async function startRun() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-            upload_id: state.upload.upload_id,
+            upload_id: state.upload ? state.upload.upload_id : null,
             devices,
             post_update_cmd: postUpdateCmd || null,
         }),

@@ -96,7 +96,7 @@ class DeviceConfig(BaseModel):
 
 
 class StartRunRequest(BaseModel):
-    upload_id: str
+    upload_id: str | None = None
     devices: list[DeviceConfig]
     post_update_cmd: str | None = None
 

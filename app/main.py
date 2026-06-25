@@ -156,12 +156,22 @@ async def devices() -> dict:
 
 
 # Blink the red user LED ~3s to physically identify the board on a bench full
-# of UNO Qs. Uses the same `echo X | tee` form as on-device docs; runs as the
+# of UNO Qs. We must (1) set the LED's trigger to `none` so kernel triggers
+# (heartbeat/timer/etc.) stop overriding manual brightness writes, and (2)
+# write `max_brightness` (typically 255) rather than `1`. Runs as the
 # `arduino` user via adb shell.
 IDENTIFY_BLINK_CMD = (
+    "LED=/sys/class/leds/red:user; "
+    "if [ ! -e \"$LED/brightness\" ]; then "
+    "  echo \"LED node $LED not found; checking alternatives:\"; "
+    "  ls /sys/class/leds/ 2>/dev/null; "
+    "  exit 1; "
+    "fi; "
+    "echo none | tee \"$LED/trigger\" >/dev/null 2>&1 || true; "
+    "MAX=$(cat \"$LED/max_brightness\" 2>/dev/null || echo 255); "
     "for i in 1 2 3 4 5; do "
-    "echo 1 | tee /sys/class/leds/red:user/brightness >/dev/null; sleep 0.3; "
-    "echo 0 | tee /sys/class/leds/red:user/brightness >/dev/null; sleep 0.3; "
+    "  echo \"$MAX\" | tee \"$LED/brightness\" >/dev/null; sleep 0.3; "
+    "  echo 0 | tee \"$LED/brightness\" >/dev/null; sleep 0.3; "
     "done"
 )
 
@@ -246,9 +256,13 @@ async def upload(
 
 @app.post("/api/runs")
 async def start_run(req: StartRunRequest) -> dict:
-    upload = registry.get_upload(req.upload_id)
-    if upload is None:
-        raise HTTPException(status_code=404, detail="upload_id not found")
+    upload = None
+    app_folder: Path | None = None
+    if req.upload_id:
+        upload = registry.get_upload(req.upload_id)
+        if upload is None:
+            raise HTTPException(status_code=404, detail="upload_id not found")
+        app_folder = upload.folder
     if not req.devices:
         raise HTTPException(status_code=400, detail="no devices selected")
 
@@ -261,7 +275,7 @@ async def start_run(req: StartRunRequest) -> dict:
 
     env_file = PROJECT_ROOT / ".env"
     ctx = FlasherContext(
-        app_folder=upload.folder,
+        app_folder=app_folder,
         setup_script=setup_script,
         env_file=env_file if env_file.is_file() else None,
         unoq_default_password=os.environ.get("UNOQ_DEFAULT_PASSWORD"),
@@ -290,8 +304,14 @@ async def retry_device(
     run = registry.get_run(run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="run not found")
-    # If the upload was already cleaned up, we cannot retry the push_app step.
-    if run.upload is None and not run.ctx.app_folder.exists():
+    # If the run originally had a folder but its staged copy was cleaned up,
+    # we can't retry the push_app step. Folderless runs (app_folder is None)
+    # are always retryable — push_app will just be skipped again.
+    if (
+        run.ctx.app_folder is not None
+        and run.upload is None
+        and not run.ctx.app_folder.exists()
+    ):
         raise HTTPException(
             status_code=410,
             detail="staged upload was cleaned up; please re-upload the folder.",
