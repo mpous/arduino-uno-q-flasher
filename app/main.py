@@ -155,7 +155,7 @@ async def devices() -> dict:
     return {"devices": [{"serial": d.serial, "state": d.state} for d in ds]}
 
 
-# Blink the red user LED ~3s to physically identify the board on a bench full
+# Blink the red user LED ~5s to physically identify the board on a bench full
 # of UNO Qs. Runs over `adb shell` which on UNO Q is the `arduino` user.
 #
 # UNO Q kernel registers user LEDs at /sys/class/leds/unoq:user-red1 (verified
@@ -231,8 +231,8 @@ fi
 READBACK=$(cat "$LED/brightness" 2>/dev/null)
 echo "[identify] brightness after first write: $READBACK (expected ~$MAX)"
 
-# Blink loop: 5 toggles, ~3 seconds total.
-for i in 1 2 3 4 5; do
+# Blink loop: 8 toggles @ 0.3s on/off = 4.8s + 0.3s tail = ~5s total.
+for i in 1 2 3 4 5 6 7 8; do
   sleep 0.3
   write_sysfs "$LED/brightness" 0
   sleep 0.3

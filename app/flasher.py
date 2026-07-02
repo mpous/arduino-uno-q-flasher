@@ -49,6 +49,67 @@ PASSWORD_TOKEN_ERROR_RE = re.compile(
     r"authentication token manipulation error", re.IGNORECASE
 )
 
+# Set the green + red user LEDs to a solid on/off state at the end of a flash.
+# Two shell vars ($GREEN, $RED) are prepended when invoked so the script itself
+# stays a constant. Probes the same node-name variants that IDENTIFY_BLINK_CMD
+# does — kernel/image versions differ slightly (unoq:user-red1 vs. red:user).
+END_STATE_LED_CMD = r"""
+set +e
+find_led() {
+  local color="$1"
+  for c in \
+      /sys/class/leds/unoq:user-${color}1 \
+      /sys/class/leds/unoq:user-${color} \
+      /sys/class/leds/${color}:user \
+      /sys/class/leds/user:${color}; do
+    if [ -e "$c/brightness" ]; then
+      echo "$c"; return 0
+    fi
+  done
+  for g in /sys/class/leds/*${color}* /sys/class/unoq:*${color}*; do
+    [ -e "$g/brightness" ] && echo "$g" && return 0
+  done
+  return 1
+}
+
+write_sysfs() {
+  local file="$1" value="$2"
+  if printf '%s' "$value" > "$file" 2>/dev/null; then return 0; fi
+  if printf '%s\n' "$value" | tee "$file" >/dev/null 2>&1; then return 0; fi
+  if printf '%s\n' "$value" | sudo -n tee "$file" >/dev/null 2>&1; then return 0; fi
+  return 1
+}
+
+set_led() {
+  local color="$1" state="$2"
+  local led
+  led=$(find_led "$color")
+  if [ -z "$led" ]; then
+    echo "[led] no $color LED found (wanted state=$state)"
+    return 0
+  fi
+  local max val
+  max=$(cat "$led/max_brightness" 2>/dev/null || echo 255)
+  write_sysfs "$led/trigger" none || true
+  if [ "$state" = "on" ]; then val="$max"; else val="0"; fi
+  if write_sysfs "$led/brightness" "$val"; then
+    echo "[led] $color=$state at $led"
+  else
+    echo "[led] failed to write $led/brightness"
+  fi
+}
+
+set_led "green" "$GREEN"
+set_led "red" "$RED"
+exit 0
+"""
+
+
+def _end_state_led_cmd(*, success: bool) -> str:
+    green = "on" if success else "off"
+    red = "off" if success else "on"
+    return f"GREEN={green}\nRED={red}\n{END_STATE_LED_CMD}"
+
 
 class FlasherContext:
     """Per-run configuration shared across all devices."""
@@ -91,14 +152,85 @@ async def flash_device(
 
     Returns True on success, False on failure. Errors in optional stages do not
     fail the run; errors in required stages do.
+
+    On a WiFi-specific failure ("No network with SSID X found"), all stages are
+    re-run once with a fresh .env push — the on-device .env may be stale from
+    an earlier flash and the local file has newer credentials. Only kicks in
+    when push_env is enabled for this run.
     """
     start_time = time.monotonic()
-    parser = SetupOutputParser()
 
     await emit(DeviceStartedEvent(device=serial))
 
     async def log(line: str, stream: str = "info", stage: Stage | None = None) -> None:
         await emit(LogEvent(device=serial, stage=stage, line=line, stream=stream))  # type: ignore[arg-type]
+
+    max_attempts = 2
+    attempt = 0
+    last_hint = None
+    last_reason: str | None = None
+
+    while attempt < max_attempts:
+        attempt += 1
+        parser = SetupOutputParser()
+
+        ok, reason = await _run_stages(serial, ctx, skip_stages, emit, parser, log)
+        _, hint = parser.finish()
+
+        if ok:
+            await _set_end_state_led(serial, success=True, log=log)
+            await emit(
+                DeviceFinishedEvent(
+                    device=serial,
+                    result="success",
+                    elapsed_seconds=round(time.monotonic() - start_time, 1),
+                )
+            )
+            return True
+
+        last_hint = hint
+        last_reason = reason
+
+        wifi_retry_possible = (
+            attempt < max_attempts
+            and hint is not None
+            and hint.code == "wifi_failed"
+            and "push_env" not in skip_stages
+            and ctx.env_file is not None
+        )
+        if wifi_retry_possible:
+            await log(
+                f"WiFi failure detected. Re-pushing local .env and retrying "
+                f"all stages (attempt {attempt + 1}/{max_attempts})...",
+            )
+            continue
+        break
+
+    await _set_end_state_led(serial, success=False, log=log)
+    await emit(
+        DeviceFinishedEvent(
+            device=serial,
+            result="failed",
+            elapsed_seconds=round(time.monotonic() - start_time, 1),
+            failure_reason=(last_hint.message if last_hint else last_reason),
+        )
+    )
+    return False
+
+
+async def _run_stages(
+    serial: str,
+    ctx: FlasherContext,
+    skip_stages: set[Stage],
+    emit: EmitFn,
+    parser: SetupOutputParser,
+    log: Callable[..., Awaitable[None]],
+) -> tuple[bool, str | None]:
+    """Run all stages once. Returns (success, failure_reason).
+
+    Failure reason is a short string used if the parser didn't produce a hint.
+    Emits SetupSummaryEvent on terminal paths.
+    """
 
     async def line_cb_for(stage: Stage):
         async def cb(line: str, stream: str) -> None:
@@ -107,22 +239,8 @@ async def flash_device(
         return cb
 
     async def line_cb_run_setup(line: str, stream: str) -> None:
-        # Feed the parser AND forward the line as a normal log event.
         parser.feed(line)
         await emit(LogEvent(device=serial, stage="run_setup", line=line, stream=stream))  # type: ignore[arg-type]
-
-    async def fail(reason: str | None = None) -> bool:
-        await _emit_summary(serial, parser, emit)
-        result, hint = parser.finish()
-        await emit(
-            DeviceFinishedEvent(
-                device=serial,
-                result="failed",
-                elapsed_seconds=round(time.monotonic() - start_time, 1),
-                failure_reason=(hint.message if hint else reason),
-            )
-        )
-        return False
 
     async def run_stage(
         stage: Stage,
@@ -154,8 +272,7 @@ async def flash_device(
         await emit(StageEvent(device=serial, stage=stage, status="failed"))
         return not required
 
-    # 1. push app folder (skipped silently if no folder was provided — useful
-    # for "maintenance" runs that only update WiFi / system / post-update).
+    # 1. push app folder (skipped silently if no folder was provided).
     if ctx.app_folder is None:
         await emit(StageEvent(device=serial, stage="push_app", status="skipped"))
         await log(
@@ -169,7 +286,8 @@ async def flash_device(
             return rc == 0
 
         if not await run_stage("push_app", stage_push_app, required=True):
-            return await fail("Failed to push app folder.")
+            await _emit_summary(serial, parser, emit)
+            return False, "Failed to push app folder."
 
     # 2. push setup script
     async def stage_push_script() -> bool:
@@ -178,7 +296,8 @@ async def flash_device(
         return rc == 0
 
     if not await run_stage("push_setup_script", stage_push_script, required=True):
-        return await fail("Failed to push setup script.")
+        await _emit_summary(serial, parser, emit)
+        return False, "Failed to push setup script."
 
     # 3. push .env (skip silently if not present)
     async def stage_push_env() -> bool:
@@ -190,7 +309,8 @@ async def flash_device(
         return rc == 0
 
     if not await run_stage("push_env", stage_push_env, required=True):
-        return await fail("Failed to push .env.")
+        await _emit_summary(serial, parser, emit)
+        return False, "Failed to push .env."
 
     # 4. chmod the setup script
     async def stage_chmod() -> bool:
@@ -201,7 +321,8 @@ async def flash_device(
         return rc == 0
 
     if not await run_stage("chmod_script", stage_chmod, required=True):
-        return await fail("Failed to chmod setup script.")
+        await _emit_summary(serial, parser, emit)
+        return False, "Failed to chmod setup script."
 
     # 5. change password (optional, can be skipped)
     async def stage_password() -> bool:
@@ -210,8 +331,8 @@ async def flash_device(
     # password failure does NOT fail the device, matching the bash script
     await run_stage("change_password", stage_password, required=False)
 
-    # 6. push properties (optional) — must happen BEFORE run_setup so the on-device
-    # setup wizard sees the "done" markers and doesn't block.
+    # 6. push properties (optional) — must happen BEFORE run_setup so the wizard
+    # sees the "done" markers and doesn't block.
     async def stage_push_properties() -> bool:
         props = ctx.properties_file
         if props is None:
@@ -236,27 +357,18 @@ async def flash_device(
         return rc == 0
 
     if not await run_stage("run_setup", stage_run_setup, required=True):
-        return await fail("Remote setup script failed.")
+        await _emit_summary(serial, parser, emit)
+        return False, "Remote setup script failed."
 
-    # If the on-device summary itself reported FAILED, treat the device as failed
-    # even though adb's exit code was 0 (the script's `trap print_summary EXIT`
-    # always prints the summary and then exits 0 if `exit 1` already ran above,
-    # but on success the box says SUCCESS).
+    # If the on-device summary itself reported FAILED, treat as failure even
+    # though adb's exit code was 0 (script's `trap print_summary EXIT` always
+    # prints the summary).
     await _emit_summary(serial, parser, emit)
     result, hint = parser.finish()
     if result is not None and result.status == "FAILED":
-        await emit(
-            DeviceFinishedEvent(
-                device=serial,
-                result="failed",
-                elapsed_seconds=round(time.monotonic() - start_time, 1),
-                failure_reason=(hint.message if hint else "Device-side setup reported FAILED."),
-            )
-        )
-        return False
+        return False, (hint.message if hint else "Device-side setup reported FAILED.")
 
-    # 8. post-update command (optional). Failure here is non-fatal — the device
-    # is already flashed; this just installs example deps / runs final setup.
+    # 8. post-update command (optional). Failure here is non-fatal.
     async def stage_post_update() -> bool:
         if not ctx.post_update_cmd:
             await log(
@@ -273,15 +385,27 @@ async def flash_device(
         return rc == 0
 
     await run_stage("post_update", stage_post_update, required=False)
+    return True, None
 
-    await emit(
-        DeviceFinishedEvent(
-            device=serial,
-            result="success",
-            elapsed_seconds=round(time.monotonic() - start_time, 1),
-        )
-    )
-    return True
+
+async def _set_end_state_led(
+    serial: str,
+    *,
+    success: bool,
+    log: Callable[..., Awaitable[None]],
+) -> None:
+    """Set the on-device LEDs to reflect the terminal flash result.
+    Success: green ON solid, red OFF. Failure: red ON solid, green OFF.
+    Best-effort — never raises. LED failures don't affect the flash result."""
+    try:
+        rc, out = await adb.shell(serial, _end_state_led_cmd(success=success))
+        if rc != 0:
+            await log(
+                f"LED end-state command exited {rc}: {out}",
+                stream="stderr",
+            )
+    except Exception as exc:  # noqa: BLE001
+        await log(f"LED end-state command raised: {exc}", stream="stderr")
 
 
 async def _emit_summary(serial: str, parser: SetupOutputParser, emit: EmitFn) -> None:
