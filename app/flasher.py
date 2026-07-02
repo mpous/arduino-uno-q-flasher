@@ -178,6 +178,7 @@ async def flash_device(
         _, hint = parser.finish()
 
         if ok:
+            await _log_arduino_cli_version(serial, log=log)
             await _set_end_state_led(serial, success=True, log=log)
             await emit(
                 DeviceFinishedEvent(
@@ -406,6 +407,35 @@ async def _set_end_state_led(
             )
     except Exception as exc:  # noqa: BLE001
         await log(f"LED end-state command raised: {exc}", stream="stderr")
+
+
+async def _log_arduino_cli_version(
+    serial: str,
+    log: Callable[..., Awaitable[None]],
+) -> None:
+    """After a successful flash, capture `arduino-cli version --json` from the
+    device and stream it to the device log. Best-effort — never raises, never
+    changes the device result."""
+
+    async def cb(line: str, stream: str) -> None:
+        await log(f"[arduino-cli version] {line}", stream=stream)  # type: ignore[arg-type]
+
+    try:
+        rc, _ = await adb.shell(
+            serial,
+            "source /etc/profile; arduino-cli version --json",
+            cb,
+        )
+        if rc != 0:
+            await log(
+                f"[arduino-cli version] exited {rc}",
+                stream="stderr",
+            )
+    except Exception as exc:  # noqa: BLE001
+        await log(
+            f"[arduino-cli version] command raised: {exc}",
+            stream="stderr",
+        )
 
 
 async def _emit_summary(serial: str, parser: SetupOutputParser, emit: EmitFn) -> None:
