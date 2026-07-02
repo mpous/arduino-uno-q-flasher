@@ -71,6 +71,23 @@ function wireControls() {
     $("#save-settings-btn").addEventListener("click", saveSettings);
     $("#skip-step-wifi").addEventListener("change", onSkipWifiToggle);
     $("#skip-step-folder").addEventListener("change", onSkipFolderToggle);
+    for (const btn of $$(".pw-toggle")) {
+        btn.addEventListener("click", () => togglePasswordVisibility(btn));
+    }
+}
+
+function togglePasswordVisibility(btn) {
+    const target = document.getElementById(btn.dataset.target);
+    if (!target) return;
+    const showing = target.type === "text";
+    target.type = showing ? "password" : "text";
+    btn.textContent = showing ? "show" : "hide";
+    btn.dataset.showing = showing ? "false" : "true";
+    btn.setAttribute(
+        "aria-label",
+        (showing ? "Show " : "Hide ") + (target.id === "setting-wifi-pw"
+            ? "WiFi password" : "device password"),
+    );
 }
 
 function onSkipWifiToggle(e) {
@@ -167,28 +184,50 @@ async function populateSettingsForm() {
     try {
         const r = await fetch("/api/settings");
         const j = await r.json();
+        // Pre-populate all three fields with the actual saved values so the
+        // user can (a) verify them with the show/hide button, and (b) edit
+        // in-place. Passwords stay masked as type="password" until revealed.
         $("#setting-ssid").value = j.UNOQ_WIFI_SSID || "";
+        $("#setting-wifi-pw").value = j.UNOQ_WIFI_PASSWORD || "";
+        $("#setting-device-pw").value = j.UNOQ_DEFAULT_PASSWORD || "";
         $("#setting-wifi-pw").placeholder = j.UNOQ_WIFI_PASSWORD_set
-            ? "(set — leave blank to keep)" : "••••••••";
+            ? "(set — click show to reveal)" : "••••••••";
         $("#setting-device-pw").placeholder = j.UNOQ_DEFAULT_PASSWORD_set
-            ? "(set — leave blank to keep)" : "••••••••";
+            ? "(set — click show to reveal)" : "••••••••";
+        renderEnvFilePath(j);
     } catch (e) {
         $("#settings-status").textContent = `load failed: ${e}`;
     }
 }
 
-async function saveSettings() {
-    const body = {};
-    const ssid = $("#setting-ssid").value;
-    const wifiPw = $("#setting-wifi-pw").value;
-    const devPw = $("#setting-device-pw").value;
-    if (ssid !== "") body.UNOQ_WIFI_SSID = ssid;
-    if (wifiPw !== "") body.UNOQ_WIFI_PASSWORD = wifiPw;
-    if (devPw !== "") body.UNOQ_DEFAULT_PASSWORD = devPw;
-    if (Object.keys(body).length === 0) {
-        $("#settings-status").textContent = "nothing to save";
+function renderEnvFilePath(j) {
+    const el = $("#env-file-path");
+    if (!el) return;
+    const path = j.env_file_path;
+    if (!path) {
+        el.hidden = true;
         return;
     }
+    el.hidden = false;
+    el.innerHTML = "";
+    const label = document.createElement("span");
+    label.className = "env-label";
+    label.textContent = j.env_file_exists ? "stored at" : "will be created at";
+    const value = document.createElement("span");
+    value.textContent = path;
+    el.appendChild(label);
+    el.appendChild(value);
+}
+
+async function saveSettings() {
+    // Fields are pre-populated with the saved values, so we send whatever's
+    // currently in them. An intentionally-cleared field will overwrite the
+    // stored value with an empty string.
+    const body = {
+        UNOQ_WIFI_SSID: $("#setting-ssid").value,
+        UNOQ_WIFI_PASSWORD: $("#setting-wifi-pw").value,
+        UNOQ_DEFAULT_PASSWORD: $("#setting-device-pw").value,
+    };
     try {
         const r = await fetch("/api/settings", {
             method: "POST",
@@ -201,10 +240,8 @@ async function saveSettings() {
             return;
         }
         $("#settings-status").textContent = "saved ✓";
-        $("#setting-wifi-pw").value = "";
-        $("#setting-device-pw").value = "";
         await refreshHealth();
-        // Clear the "saved" indicator after a moment.
+        await populateSettingsForm();
         setTimeout(() => {
             $("#settings-status").textContent = "";
         }, 1500);

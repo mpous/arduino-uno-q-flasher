@@ -230,6 +230,70 @@ html, body {
     flex-wrap: wrap;
 }
 
+/* ===== password reveal ===== */
+
+.pw-field {
+    position: relative;
+    display: flex;
+    align-items: stretch;
+    width: 100%;
+}
+
+.pw-field input {
+    padding-right: 60px;
+    flex: 1;
+}
+
+.pw-toggle {
+    position: absolute;
+    right: 4px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    padding: 3px 8px;
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.pw-toggle:hover {
+    background: var(--surface-muted);
+    color: var(--text);
+    border-color: var(--border-strong);
+}
+
+.pw-toggle[data-showing="true"] {
+    background: var(--accent-soft);
+    color: var(--accent-dark);
+    border-color: var(--accent);
+}
+
+.env-file-path {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
+    color: var(--text-muted);
+    padding: 6px 8px;
+    background: var(--surface);
+    border: 1px dashed var(--border);
+    border-radius: var(--radius-sm);
+    word-break: break-all;
+}
+
+.env-file-path .env-label {
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-size: 10px;
+    color: var(--text-faint);
+    margin-right: 6px;
+    font-family: inherit;
+}
+
 /* ===== 3-step header ===== */
 
 .steps {

@@ -153,10 +153,11 @@ async def flash_device(
     Returns True on success, False on failure. Errors in optional stages do not
     fail the run; errors in required stages do.
 
-    On a WiFi-specific failure ("No network with SSID X found"), all stages are
-    re-run once with a fresh .env push — the on-device .env may be stale from
-    an earlier flash and the local file has newer credentials. Only kicks in
-    when push_env is enabled for this run.
+    On a WiFi failure ("No network with SSID X found", missing on-device
+    UNOQ_WIFI_SSID / UNOQ_WIFI_PASSWORD, or a missing /home/arduino/.env), all
+    stages are re-run once and push_env is force-included on the retry — the
+    on-device .env may be missing, empty, or hold stale credentials that don't
+    match the local file.
     """
     start_time = time.monotonic()
 
@@ -169,12 +170,13 @@ async def flash_device(
     attempt = 0
     last_hint = None
     last_reason: str | None = None
+    current_skip = set(skip_stages)
 
     while attempt < max_attempts:
         attempt += 1
         parser = SetupOutputParser()
 
-        ok, reason = await _run_stages(serial, ctx, skip_stages, emit, parser, log)
+        ok, reason = await _run_stages(serial, ctx, current_skip, emit, parser, log)
         _, hint = parser.finish()
 
         if ok:
@@ -192,14 +194,23 @@ async def flash_device(
         last_hint = hint
         last_reason = reason
 
+        # On WiFi failure: force-push local .env (even if the user originally
+        # skipped Step 1) and re-run all stages. The device's on-device .env
+        # may be missing, empty, or hold stale credentials that don't match
+        # what's in the local file.
         wifi_retry_possible = (
             attempt < max_attempts
             and hint is not None
             and hint.code == "wifi_failed"
-            and "push_env" not in skip_stages
             and ctx.env_file is not None
         )
         if wifi_retry_possible:
+            if "push_env" in current_skip:
+                await log(
+                    "WiFi failure detected and push_env was skipped. "
+                    "Overriding skip so local .env is pushed on retry.",
+                )
+                current_skip = current_skip - {"push_env"}
             await log(
                 f"WiFi failure detected. Re-pushing local .env and retrying "
                 f"all stages (attempt {attempt + 1}/{max_attempts})...",

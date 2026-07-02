@@ -114,20 +114,25 @@ class SettingsBody(BaseModel):
 
 @app.get("/api/settings")
 async def get_settings() -> dict:
-    """Return current managed-key values. Passwords are masked to a bool."""
+    """Return current managed-key values. Passwords are returned in plaintext
+    so the UI can render a show/hide reveal button — the .env file itself is
+    plaintext on disk, so exposing it over localhost is not an additional risk.
+    Also returns the absolute path of the .env file so the UI can show it."""
     env_path = PROJECT_ROOT / ".env"
     on_disk = read_env(env_path)
+
+    def _val(key: str) -> str:
+        return on_disk.get(key) or os.environ.get(key) or ""
+
     return {
-        "UNOQ_WIFI_SSID": on_disk.get("UNOQ_WIFI_SSID")
-        or os.environ.get("UNOQ_WIFI_SSID")
-        or "",
-        "UNOQ_WIFI_PASSWORD_set": bool(
-            on_disk.get("UNOQ_WIFI_PASSWORD") or os.environ.get("UNOQ_WIFI_PASSWORD")
-        ),
-        "UNOQ_DEFAULT_PASSWORD_set": bool(
-            on_disk.get("UNOQ_DEFAULT_PASSWORD")
-            or os.environ.get("UNOQ_DEFAULT_PASSWORD")
-        ),
+        "UNOQ_WIFI_SSID": _val("UNOQ_WIFI_SSID"),
+        "UNOQ_WIFI_PASSWORD": _val("UNOQ_WIFI_PASSWORD"),
+        "UNOQ_DEFAULT_PASSWORD": _val("UNOQ_DEFAULT_PASSWORD"),
+        # Kept for backwards-compat with older frontends and health checks.
+        "UNOQ_WIFI_PASSWORD_set": bool(_val("UNOQ_WIFI_PASSWORD")),
+        "UNOQ_DEFAULT_PASSWORD_set": bool(_val("UNOQ_DEFAULT_PASSWORD")),
+        "env_file_path": str(env_path),
+        "env_file_exists": env_path.exists(),
     }
 
 

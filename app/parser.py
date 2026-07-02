@@ -29,8 +29,18 @@ STATUS_RE = re.compile(r"Status\s*:\s*(SUCCESS|FAILED)")
 ERROR_BULLET_RE = re.compile(r"║\s*•\s*(.*?)\s*║?\s*$")
 
 OUT_OF_DATE_RE = re.compile(r"too far out of date", re.IGNORECASE)
+# WiFi failure signals we treat as recoverable by re-pushing local .env:
+#   - "WiFi connection failed" / "No Wi-Fi device found"  (nmcli errors, incl.
+#     "No network with SSID 'X' found")
+#   - "UNOQ_WIFI_SSID and UNOQ_WIFI_PASSWORD environment variables must be set"
+#     (device .env missing or empty vars)
+#   - "/home/arduino/.env file not found"  (device .env absent altogether)
 WIFI_FAIL_RE = re.compile(
-    r"WiFi connection failed|No Wi-Fi device found", re.IGNORECASE
+    r"WiFi connection failed"
+    r"|No Wi-Fi device found"
+    r"|UNOQ_WIFI_SSID.*must be set"
+    r"|/home/arduino/\.env file not found",
+    re.IGNORECASE,
 )
 SYSTEM_UPDATE_FAIL_RE = re.compile(
     r"arduino-app-cli system update failed", re.IGNORECASE

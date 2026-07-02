@@ -41,16 +41,35 @@
                     </label>
                     <label class="inline-setting">
                         <span>WiFi password</span>
-                        <input type="password" id="setting-wifi-pw" placeholder="••••••••" />
+                        <div class="pw-field">
+                            <input type="password" id="setting-wifi-pw" placeholder="••••••••" />
+                            <button
+                                type="button"
+                                class="pw-toggle"
+                                data-target="setting-wifi-pw"
+                                aria-label="Show WiFi password"
+                                title="Show / hide password"
+                            >show</button>
+                        </div>
                     </label>
                     <label class="inline-setting">
                         <span>Default device password <em>(optional)</em></span>
-                        <input type="password" id="setting-device-pw" placeholder="••••••••" />
+                        <div class="pw-field">
+                            <input type="password" id="setting-device-pw" placeholder="••••••••" />
+                            <button
+                                type="button"
+                                class="pw-toggle"
+                                data-target="setting-device-pw"
+                                aria-label="Show device password"
+                                title="Show / hide password"
+                            >show</button>
+                        </div>
                     </label>
                     <div class="inline-settings-actions">
                         <button id="save-settings-btn" class="btn btn-primary btn-small">Save</button>
                         <span id="settings-status" class="muted"></span>
                     </div>
+                    <div id="env-file-path" class="env-file-path muted" hidden></div>
                 </div>
             </div>
         </div>
