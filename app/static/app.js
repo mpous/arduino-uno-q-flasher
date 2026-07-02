@@ -72,22 +72,22 @@ function wireControls() {
     $("#skip-step-wifi").addEventListener("change", onSkipWifiToggle);
     $("#skip-step-folder").addEventListener("change", onSkipFolderToggle);
     for (const btn of $$(".pw-toggle")) {
-        btn.addEventListener("click", () => togglePasswordVisibility(btn));
+        btn.addEventListener("click", (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            togglePasswordVisibility(btn);
+        });
     }
 }
 
 function togglePasswordVisibility(btn) {
     const target = document.getElementById(btn.dataset.target);
     if (!target) return;
-    const showing = target.type === "text";
-    target.type = showing ? "password" : "text";
-    btn.textContent = showing ? "show" : "hide";
-    btn.dataset.showing = showing ? "false" : "true";
-    btn.setAttribute(
-        "aria-label",
-        (showing ? "Show " : "Hide ") + (target.id === "setting-wifi-pw"
-            ? "WiFi password" : "device password"),
-    );
+    const nowShowing = target.type === "password";
+    target.type = nowShowing ? "text" : "password";
+    btn.dataset.showing = nowShowing ? "true" : "false";
+    const which = target.id === "setting-wifi-pw" ? "WiFi password" : "device password";
+    btn.setAttribute("aria-label", (nowShowing ? "Hide " : "Show ") + which);
 }
 
 function onSkipWifiToggle(e) {

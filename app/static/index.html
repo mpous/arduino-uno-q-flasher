@@ -35,36 +35,58 @@
                     <span>Skip — keep existing WiFi & device password on board</span>
                 </label>
                 <div id="wifi-settings-form" class="inline-settings">
-                    <label class="inline-setting">
-                        <span>WiFi SSID</span>
+                    <div class="inline-setting">
+                        <label for="setting-ssid">WiFi SSID</label>
                         <input type="text" id="setting-ssid" placeholder="MyNetwork" />
-                    </label>
-                    <label class="inline-setting">
-                        <span>WiFi password</span>
+                    </div>
+                    <div class="inline-setting">
+                        <label for="setting-wifi-pw">WiFi password</label>
                         <div class="pw-field">
-                            <input type="password" id="setting-wifi-pw" placeholder="••••••••" />
+                            <input type="password" id="setting-wifi-pw" placeholder="••••••••" autocomplete="off" />
                             <button
                                 type="button"
                                 class="pw-toggle"
                                 data-target="setting-wifi-pw"
                                 aria-label="Show WiFi password"
                                 title="Show / hide password"
-                            >show</button>
+                            >
+                                <svg class="pw-icon pw-icon-eye" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                                    <circle cx="12" cy="12" r="3"/>
+                                </svg>
+                                <svg class="pw-icon pw-icon-eye-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                    <path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-11-8-11-8a19.87 19.87 0 0 1 4.22-5.42"/>
+                                    <path d="M9.9 4.24A10.94 10.94 0 0 1 12 4c7 0 11 8 11 8a19.87 19.87 0 0 1-3.16 4.13"/>
+                                    <path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/>
+                                    <line x1="1" y1="1" x2="23" y2="23"/>
+                                </svg>
+                            </button>
                         </div>
-                    </label>
-                    <label class="inline-setting">
-                        <span>Default device password <em>(optional)</em></span>
+                    </div>
+                    <div class="inline-setting">
+                        <label for="setting-device-pw">Default device password <em>(optional)</em></label>
                         <div class="pw-field">
-                            <input type="password" id="setting-device-pw" placeholder="••••••••" />
+                            <input type="password" id="setting-device-pw" placeholder="••••••••" autocomplete="off" />
                             <button
                                 type="button"
                                 class="pw-toggle"
                                 data-target="setting-device-pw"
                                 aria-label="Show device password"
                                 title="Show / hide password"
-                            >show</button>
+                            >
+                                <svg class="pw-icon pw-icon-eye" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                                    <circle cx="12" cy="12" r="3"/>
+                                </svg>
+                                <svg class="pw-icon pw-icon-eye-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                    <path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-11-8-11-8a19.87 19.87 0 0 1 4.22-5.42"/>
+                                    <path d="M9.9 4.24A10.94 10.94 0 0 1 12 4c7 0 11 8 11 8a19.87 19.87 0 0 1-3.16 4.13"/>
+                                    <path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/>
+                                    <line x1="1" y1="1" x2="23" y2="23"/>
+                                </svg>
+                            </button>
                         </div>
-                    </label>
+                    </div>
                     <div class="inline-settings-actions">
                         <button id="save-settings-btn" class="btn btn-primary btn-small">Save</button>
                         <span id="settings-status" class="muted"></span>

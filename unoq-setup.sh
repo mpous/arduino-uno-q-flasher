@@ -67,16 +67,48 @@ log "Updating PATH..."
 export PATH=$PATH:/usr/bin:/bin:/usr/local/bin
 
 # ── WiFi ──────────────────────────────────────────────────────────────────────
+
+# On UNO Q the WiFi radio is sometimes soft-blocked (rfkill) and/or disabled in
+# NetworkManager after a fresh image boot, so `nmcli dev wifi connect` returns
+# "No Wi-Fi device found." even though the hardware is present. Explicitly
+# unblock + enable the radio first, then wait for a wifi-type device to appear
+# via nmcli (the module can take a few seconds to register).
+log "Unblocking WiFi radio (rfkill) and enabling it via NetworkManager..."
+rfkill unblock wifi 2>/dev/null || log "rfkill unblock wifi failed (rfkill may be absent)"
+nmcli radio wifi on 2>/dev/null || log "nmcli radio wifi on failed"
+
+log "Waiting for a WiFi interface to appear (up to 30s)..."
+WIFI_DEV_WAIT=30
+WIFI_DEV_COUNT=0
+WIFI_DEV_READY=0
+while [ "$WIFI_DEV_COUNT" -lt "$WIFI_DEV_WAIT" ]; do
+    if nmcli -t -f DEVICE,TYPE device 2>/dev/null | grep -q ':wifi$'; then
+        log "WiFi interface detected after ${WIFI_DEV_COUNT}s."
+        WIFI_DEV_READY=1
+        break
+    fi
+    WIFI_DEV_COUNT=$((WIFI_DEV_COUNT + 1))
+    sleep 1
+done
+if [ "$WIFI_DEV_READY" -ne 1 ]; then
+    log "WARNING: no WiFi interface after ${WIFI_DEV_WAIT}s. Attempting connect anyway."
+fi
+
 log "Checking if WiFi is already connected..."
 CURRENT_SSID=$(nmcli -t -f active,ssid dev wifi | grep '^yes:' | cut -d':' -f2)
 if [ "$CURRENT_SSID" = "$UNOQ_WIFI_SSID" ]; then
     log "Already connected to WiFi SSID: $UNOQ_WIFI_SSID"
 else
+    log "Rescanning available WiFi networks..."
+    nmcli dev wifi rescan 2>/dev/null || true
+
     log "Connecting to WiFi..."
     wifi_command="nmcli dev wifi connect $UNOQ_WIFI_SSID password $UNOQ_WIFI_PASSWORD"
     log "WiFi command: $wifi_command"
 
-    WIFI_RETRY_MAX=3
+    # Increased retries to cover both "radio not up yet" and "SSID not seen in
+    # the first scan". Total budget: up to 10 * 3s = 30s.
+    WIFI_RETRY_MAX=10
     WIFI_RETRY_DELAY=3
     WIFI_ATTEMPT=1
     WIFI_CONNECTED=0
@@ -91,7 +123,17 @@ else
         fi
 
         if echo "$WIFI_OUTPUT" | grep -Fq "No Wi-Fi device found."; then
-            log "No Wi-Fi device found (attempt ${WIFI_ATTEMPT}/${WIFI_RETRY_MAX}); retrying in ${WIFI_RETRY_DELAY}s..."
+            log "No Wi-Fi device found (attempt ${WIFI_ATTEMPT}/${WIFI_RETRY_MAX}); rechecking radio and retrying in ${WIFI_RETRY_DELAY}s..."
+            rfkill unblock wifi 2>/dev/null || true
+            nmcli radio wifi on 2>/dev/null || true
+            sleep "$WIFI_RETRY_DELAY"
+            WIFI_ATTEMPT=$((WIFI_ATTEMPT + 1))
+            continue
+        fi
+
+        if echo "$WIFI_OUTPUT" | grep -Fq "No network with SSID"; then
+            log "SSID '$UNOQ_WIFI_SSID' not seen (attempt ${WIFI_ATTEMPT}/${WIFI_RETRY_MAX}); rescanning and retrying in ${WIFI_RETRY_DELAY}s..."
+            nmcli dev wifi rescan 2>/dev/null || true
             sleep "$WIFI_RETRY_DELAY"
             WIFI_ATTEMPT=$((WIFI_ATTEMPT + 1))
             continue
@@ -103,7 +145,7 @@ else
 
     if [ "$WIFI_CONNECTED" -ne 1 ]; then
         if [ "$WIFI_ATTEMPT" -gt "$WIFI_RETRY_MAX" ]; then
-            add_error "WiFi connection failed after ${WIFI_RETRY_MAX} attempts: No Wi-Fi device found."
+            add_error "WiFi connection failed after ${WIFI_RETRY_MAX} attempts. Last output: $WIFI_OUTPUT"
         fi
         exit 1
     fi

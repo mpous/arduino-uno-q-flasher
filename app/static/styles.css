@@ -240,7 +240,7 @@ html, body {
 }
 
 .pw-field input {
-    padding-right: 60px;
+    padding-right: 40px;
     flex: 1;
 }
 
@@ -250,29 +250,38 @@ html, body {
     top: 50%;
     transform: translateY(-50%);
     background: transparent;
-    border: 1px solid var(--border);
-    color: var(--text-muted);
-    padding: 3px 8px;
-    font-size: 11px;
-    font-weight: 500;
-    letter-spacing: 0.03em;
-    text-transform: uppercase;
-    border-radius: var(--radius-sm);
+    border: none;
+    color: var(--text-faint);
+    padding: 4px;
+    height: 28px;
+    width: 32px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     cursor: pointer;
-    transition: background 0.15s, color 0.15s, border-color 0.15s;
+    border-radius: var(--radius-sm);
+    transition: color 0.15s, background 0.15s;
 }
 
-.pw-toggle:hover {
+.pw-toggle:hover,
+.pw-toggle:focus-visible {
     background: var(--surface-muted);
-    color: var(--text);
-    border-color: var(--border-strong);
+    color: var(--accent-dark);
+    outline: none;
 }
 
-.pw-toggle[data-showing="true"] {
-    background: var(--accent-soft);
-    color: var(--accent-dark);
-    border-color: var(--accent);
+.pw-icon {
+    width: 18px;
+    height: 18px;
+    display: block;
 }
+
+/* Toggle which of the two SVGs shows based on data-showing. Default state
+   (password hidden) shows the plain eye; toggled state shows crossed-out. */
+.pw-toggle .pw-icon-eye-off { display: none; }
+.pw-toggle[data-showing="true"] .pw-icon-eye     { display: none; }
+.pw-toggle[data-showing="true"] .pw-icon-eye-off { display: block; }
+.pw-toggle[data-showing="true"]                  { color: var(--accent-dark); }
 
 .env-file-path {
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
