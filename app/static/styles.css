@@ -170,7 +170,8 @@ html, body {
 }
 
 .step[data-status="skipped"] #wifi-settings-form,
-.step[data-status="skipped"] #folder-controls {
+.step[data-status="skipped"] #folder-controls,
+.step[data-status="skipped"] .post-update-label {
     display: none;
 }
 
