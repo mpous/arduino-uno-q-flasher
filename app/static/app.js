@@ -42,8 +42,6 @@ const state = {
     skipStep1: false,
     skipStep2: false,
 
-    runTotal: 0,
-    runCompleted: 0,
     runMode: null,
 };
 
@@ -470,7 +468,7 @@ function updateRunStepState(override) {
     const n = state.devices.length;
     if (state.runId !== null) {
         step.dataset.status = "ready";
-        stateEl.textContent = `running on ${state.runTotal} board${state.runTotal === 1 ? "" : "s"}`;
+        stateEl.textContent = `running on ${n} board${n === 1 ? "" : "s"}`;
         return;
     }
     if (n === 0) {
@@ -516,7 +514,6 @@ async function startRun(mode /* 'start' | 'update' */) {
     const sendUpload = mode !== "update" && !state.skipStep2 && state.upload;
 
     resetAllCards();
-    showRunProgress(state.devices.length, mode);
 
     const r = await fetch("/api/runs", {
         method: "POST",
@@ -530,7 +527,6 @@ async function startRun(mode /* 'start' | 'update' */) {
     if (!r.ok) {
         const j = await r.json().catch(() => ({}));
         $("#run-status").textContent = `start failed: ${j.detail || r.status}`;
-        hideRunProgress();
         return;
     }
     const j = await r.json();
@@ -590,33 +586,6 @@ async function identifyDevice(serial) {
     }
 }
 
-// ---------- aggregate progress bar ----------
-
-function showRunProgress(total, mode) {
-    state.runTotal = total;
-    state.runCompleted = 0;
-    $("#run-progress-bar").hidden = false;
-    $("#run-progress-label").textContent =
-        mode === "update" ? "Updating boards…" : "Flashing boards…";
-    $("#run-progress-counts").textContent = `0/${total}`;
-    $("#run-progress-fill").style.width = "0%";
-}
-
-function bumpRunProgress() {
-    state.runCompleted += 1;
-    const pct = state.runTotal === 0 ? 0
-        : (state.runCompleted / state.runTotal) * 100;
-    $("#run-progress-fill").style.width = `${pct}%`;
-    $("#run-progress-counts").textContent =
-        `${state.runCompleted}/${state.runTotal}`;
-}
-
-function hideRunProgress() {
-    setTimeout(() => {
-        $("#run-progress-bar").hidden = true;
-    }, 2500);
-}
-
 // ---------- WebSocket ----------
 
 function openWs(runId) {
@@ -633,7 +602,6 @@ function openWs(runId) {
         state.runId = null;
         for (const serial of state.cards.keys()) stopLiveTimer(serial);
         updateStartButtons();
-        hideRunProgress();
     };
     ws.onerror = () => console.log("ws error");
 }
@@ -649,6 +617,25 @@ function handleEvent(ev) {
             c.failureEl.hidden = true;
             c.summaryEl.hidden = true;
             startLiveTimer(ev.device);
+            break;
+        }
+        case "device_retry": {
+            const c = state.cards.get(ev.device);
+            if (!c) return;
+            // A new attempt is about to begin — clear the previous attempt's
+            // FAILED summary/reason so the card doesn't look done. Keep the
+            // live timer running (elapsed accumulates across attempts).
+            c.badgeEl.dataset.status = "running";
+            c.badgeEl.textContent = `retry ${ev.attempt}/${ev.max_attempts}`;
+            c.failureEl.hidden = true;
+            c.summaryEl.hidden = true;
+            c.progressEl.style.width = "0%";
+            c.stageEl.textContent = "retrying…";
+            appendLog(
+                ev.device,
+                `--- retry attempt ${ev.attempt}/${ev.max_attempts}${ev.reason ? " · " + ev.reason : ""} ---`,
+                "info",
+            );
             break;
         }
         case "stage": {
@@ -709,7 +696,6 @@ function handleEvent(ev) {
             } else {
                 c.progressEl.style.width = "100%";
             }
-            bumpRunProgress();
             break;
         }
         case "run_finished": {
@@ -717,7 +703,6 @@ function handleEvent(ev) {
                 `done · ${ev.successful.length} ok, ${ev.failed.length} failed`;
             state.runId = null;
             updateStartButtons();
-            hideRunProgress();
             break;
         }
     }

@@ -56,6 +56,18 @@ class DeviceStartedEvent(BaseModel):
     device: str
 
 
+class DeviceRetryEvent(BaseModel):
+    """Emitted when the flasher begins a fresh retry attempt for a device.
+    The frontend uses this to clear the previous attempt's FAILED summary and
+    failure banner without resetting the running live timer."""
+
+    type: Literal["device_retry"] = "device_retry"
+    device: str
+    attempt: int
+    max_attempts: int
+    reason: str | None = None
+
+
 class DeviceFinishedEvent(BaseModel):
     type: Literal["device_finished"] = "device_finished"
     device: str
@@ -84,6 +96,7 @@ Event = (
     StageEvent
     | LogEvent
     | DeviceStartedEvent
+    | DeviceRetryEvent
     | DeviceFinishedEvent
     | SetupSummaryEvent
     | RunFinishedEvent

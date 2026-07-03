@@ -16,6 +16,7 @@ from . import adb
 from .events import (
     ALL_STAGES,
     DeviceFinishedEvent,
+    DeviceRetryEvent,
     DeviceStartedEvent,
     Event,
     LogEvent,
@@ -215,6 +216,14 @@ async def flash_device(
                 f"WiFi failure detected. Re-pushing local .env and retrying "
                 f"all stages (attempt {attempt + 1}/{max_attempts})...",
             )
+            await emit(
+                DeviceRetryEvent(
+                    device=serial,
+                    attempt=attempt + 1,
+                    max_attempts=max_attempts,
+                    reason="WiFi failure — re-pushing .env and retrying.",
+                )
+            )
             continue
         break
 
@@ -389,9 +398,14 @@ async def _run_stages(
             )
             return True
         cb = await line_cb_for("post_update")
+        # Run the command inside a login shell so `app`, `arduino-app-cli`,
+        # and any other alias/PATH entry defined in /etc/profile.d/* or the
+        # arduino user's ~/.bashrc / ~/.profile is resolved. `source /etc/profile`
+        # alone is not enough — some UNO Q images register the `app` shim only
+        # in ~/.bashrc.
         rc, _ = await adb.shell(
             serial,
-            f"source /etc/profile; {ctx.post_update_cmd}",
+            f"bash -lc {shlex.quote(ctx.post_update_cmd)}",
             cb,
         )
         return rc == 0

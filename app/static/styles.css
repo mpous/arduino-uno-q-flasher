@@ -468,42 +468,6 @@ html, body {
     color: #92400e;
 }
 
-/* ===== aggregate run progress bar ===== */
-
-.run-progress {
-    padding: 14px 28px;
-    background: var(--surface);
-    border-bottom: 1px solid var(--border);
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-}
-
-.run-progress-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    font-size: 13px;
-    font-weight: 500;
-    color: var(--text);
-}
-
-.run-progress-track {
-    height: 8px;
-    background: var(--surface-muted);
-    border-radius: 999px;
-    overflow: hidden;
-    border: 1px solid var(--border);
-}
-
-.run-progress-fill {
-    height: 100%;
-    width: 0%;
-    background: linear-gradient(90deg, var(--accent), var(--accent-dark));
-    border-radius: 999px;
-    transition: width 0.4s ease;
-}
-
 /* ===== run mode selector ===== */
 
 .run-mode {
