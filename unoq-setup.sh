@@ -72,13 +72,28 @@ export PATH=$PATH:/usr/bin:/bin:/usr/local/bin
 # NetworkManager after a fresh image boot, so `nmcli dev wifi connect` returns
 # "No Wi-Fi device found." even though the hardware is present. Explicitly
 # unblock + enable the radio first, then wait for a wifi-type device to appear
-# via nmcli (the module can take a few seconds to register).
+# via nmcli (the module can take a while to register — up to a minute on cold
+# boots).
 log "Unblocking WiFi radio (rfkill) and enabling it via NetworkManager..."
 rfkill unblock wifi 2>/dev/null || log "rfkill unblock wifi failed (rfkill may be absent)"
+rfkill unblock all 2>/dev/null || true
 nmcli radio wifi on 2>/dev/null || log "nmcli radio wifi on failed"
 
-log "Waiting for a WiFi interface to appear (up to 30s)..."
-WIFI_DEV_WAIT=30
+diagnose_wifi() {
+    log "--- WiFi diagnostics ---"
+    log "rfkill list:"
+    rfkill list 2>&1 | while IFS= read -r L; do log "  $L"; done
+    log "ip link (wl* interfaces):"
+    ip -o link show 2>&1 | grep -E 'wl|wlan' | while IFS= read -r L; do log "  $L"; done
+    log "nmcli device status:"
+    nmcli device status 2>&1 | while IFS= read -r L; do log "  $L"; done
+    log "lsmod wifi-ish modules:"
+    lsmod 2>&1 | grep -Ei 'wifi|wlan|brcm|mwifiex|nrc|rtl|iwl' | while IFS= read -r L; do log "  $L"; done
+    log "-------------------------"
+}
+
+log "Waiting for a WiFi interface to appear (up to 60s)..."
+WIFI_DEV_WAIT=60
 WIFI_DEV_COUNT=0
 WIFI_DEV_READY=0
 while [ "$WIFI_DEV_COUNT" -lt "$WIFI_DEV_WAIT" ]; do
@@ -87,11 +102,37 @@ while [ "$WIFI_DEV_COUNT" -lt "$WIFI_DEV_WAIT" ]; do
         WIFI_DEV_READY=1
         break
     fi
+    # Kernel may see a wl* interface even if NetworkManager isn't tracking it
+    # yet — poke NM to re-scan its devices in that case.
+    if [ $((WIFI_DEV_COUNT % 10)) -eq 5 ] \
+        && ip -o link show 2>/dev/null | grep -qE 'wl|wlan'; then
+        log "Kernel has a wl* interface but nmcli doesn't; nudging NetworkManager..."
+        nmcli general reload 2>/dev/null || true
+    fi
     WIFI_DEV_COUNT=$((WIFI_DEV_COUNT + 1))
     sleep 1
 done
 if [ "$WIFI_DEV_READY" -ne 1 ]; then
-    log "WARNING: no WiFi interface after ${WIFI_DEV_WAIT}s. Attempting connect anyway."
+    log "WARNING: no WiFi interface after ${WIFI_DEV_WAIT}s. Running diagnostics and attempting NM restart..."
+    diagnose_wifi
+    if command -v systemctl >/dev/null 2>&1; then
+        sudo -n systemctl restart NetworkManager 2>/dev/null \
+            && log "NetworkManager restarted; waiting up to 15s for wifi device..." \
+            || log "Could not restart NetworkManager (no sudo?)."
+        WIFI_DEV_COUNT=0
+        while [ "$WIFI_DEV_COUNT" -lt 15 ]; do
+            if nmcli -t -f DEVICE,TYPE device 2>/dev/null | grep -q ':wifi$'; then
+                log "WiFi interface detected after NM restart (${WIFI_DEV_COUNT}s)."
+                WIFI_DEV_READY=1
+                break
+            fi
+            WIFI_DEV_COUNT=$((WIFI_DEV_COUNT + 1))
+            sleep 1
+        done
+    fi
+fi
+if [ "$WIFI_DEV_READY" -ne 1 ]; then
+    log "WARNING: still no WiFi interface. Attempting connect anyway."
 fi
 
 log "Checking if WiFi is already connected..."
@@ -106,10 +147,10 @@ else
     wifi_command="nmcli dev wifi connect $UNOQ_WIFI_SSID password $UNOQ_WIFI_PASSWORD"
     log "WiFi command: $wifi_command"
 
-    # Increased retries to cover both "radio not up yet" and "SSID not seen in
-    # the first scan". Total budget: up to 10 * 3s = 30s.
-    WIFI_RETRY_MAX=10
-    WIFI_RETRY_DELAY=3
+    # Retry budget: up to 15 * 4s = 60s. Covers "radio not up yet", "SSID not
+    # seen in the first scan", and slow driver init after a cold boot.
+    WIFI_RETRY_MAX=15
+    WIFI_RETRY_DELAY=4
     WIFI_ATTEMPT=1
     WIFI_CONNECTED=0
 
@@ -125,7 +166,18 @@ else
         if echo "$WIFI_OUTPUT" | grep -Fq "No Wi-Fi device found."; then
             log "No Wi-Fi device found (attempt ${WIFI_ATTEMPT}/${WIFI_RETRY_MAX}); rechecking radio and retrying in ${WIFI_RETRY_DELAY}s..."
             rfkill unblock wifi 2>/dev/null || true
+            rfkill unblock all 2>/dev/null || true
             nmcli radio wifi on 2>/dev/null || true
+            # Every 5th attempt: dump diagnostics + try a harder recovery.
+            if [ "$WIFI_ATTEMPT" -eq 5 ] || [ "$WIFI_ATTEMPT" -eq 10 ]; then
+                diagnose_wifi
+                if command -v systemctl >/dev/null 2>&1; then
+                    log "Attempting sudo -n systemctl restart NetworkManager..."
+                    sudo -n systemctl restart NetworkManager 2>/dev/null \
+                        || log "  (restart failed or no sudo)"
+                fi
+                nmcli general reload 2>/dev/null || true
+            fi
             sleep "$WIFI_RETRY_DELAY"
             WIFI_ATTEMPT=$((WIFI_ATTEMPT + 1))
             continue
@@ -145,6 +197,7 @@ else
 
     if [ "$WIFI_CONNECTED" -ne 1 ]; then
         if [ "$WIFI_ATTEMPT" -gt "$WIFI_RETRY_MAX" ]; then
+            diagnose_wifi
             add_error "WiFi connection failed after ${WIFI_RETRY_MAX} attempts. Last output: $WIFI_OUTPUT"
         fi
         exit 1
@@ -176,11 +229,26 @@ done
 log "Internet connectivity confirmed."
 
 # ── App brick permissions ─────────────────────────────────────────────────────
-log "Installing app brick (setting permissions for models)..."
-chmod +x /home/arduino/ArduinoApps/example-arduino-app-lab-object-detection-using-flask/models/rubber-ducky-linux-aarch64.eim \
-    || add_error "chmod failed: rubber-ducky-linux-aarch64.eim"
-chmod +x /home/arduino/ArduinoApps/example-arduino-app-lab-object-detection-using-flask/models/rubber-ducky-fomo-linux-aarch64.eim \
-    || add_error "chmod failed: rubber-ducky-fomo-linux-aarch64.eim"
+# Make every .eim model under ArduinoApps executable. Missing files or a missing
+# ArduinoApps directory are not errors — many boards / app folders won't have
+# any .eim models at all.
+log "Setting +x on any .eim models under /home/arduino/ArduinoApps (if any)..."
+if [ -d /home/arduino/ArduinoApps ]; then
+    EIM_COUNT=0
+    EIM_FAILED=0
+    while IFS= read -r -d '' EIM_PATH; do
+        EIM_COUNT=$((EIM_COUNT + 1))
+        if chmod +x "$EIM_PATH" 2>/dev/null; then
+            log "chmod +x $EIM_PATH"
+        else
+            EIM_FAILED=$((EIM_FAILED + 1))
+            log "WARN: chmod +x failed for $EIM_PATH (continuing)"
+        fi
+    done < <(find /home/arduino/ArduinoApps -type f -name '*.eim' -print0 2>/dev/null)
+    log "Processed ${EIM_COUNT} .eim file(s); ${EIM_FAILED} chmod failure(s)."
+else
+    log "No /home/arduino/ArduinoApps directory; skipping .eim permission step."
+fi
 
 # ── System update ─────────────────────────────────────────────────────────────
 log "Running arduino-app-cli system update..."

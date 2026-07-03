@@ -144,9 +144,24 @@
                 </div>
             </div>
             <div class="step-body">
+                <div class="run-mode" role="radiogroup" aria-label="Run mode">
+                    <label class="run-mode-option">
+                        <input type="radio" name="run-mode" value="start" checked />
+                        <span class="run-mode-label">
+                            <span class="run-mode-title">Full setup</span>
+                            <span class="run-mode-desc">First-time provisioning: WiFi, app, password, run setup + post-update.</span>
+                        </span>
+                    </label>
+                    <label class="run-mode-option">
+                        <input type="radio" name="run-mode" value="update" />
+                        <span class="run-mode-label">
+                            <span class="run-mode-title">Update only</span>
+                            <span class="run-mode-desc">Re-run setup script on already-configured boards (no app/WiFi/password change).</span>
+                        </span>
+                    </label>
+                </div>
                 <div class="step-actions">
-                    <button id="start-btn" class="btn btn-primary" disabled>Start all</button>
-                    <button id="update-btn" class="btn btn-secondary" disabled>Update all</button>
+                    <button id="run-btn" class="btn btn-primary" disabled>Run on all boards</button>
                 </div>
                 <button id="refresh-btn" class="btn btn-ghost btn-small">⟳ Refresh devices</button>
                 <div id="run-status" class="muted"></div>

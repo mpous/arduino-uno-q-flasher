@@ -66,11 +66,16 @@ function wireControls() {
         refreshHealth();
         refreshDevices();
     });
-    $("#start-btn").addEventListener("click", () => startRun("start"));
-    $("#update-btn").addEventListener("click", () => startRun("update"));
+    $("#run-btn").addEventListener("click", () => startRun(currentMode()));
     $("#save-settings-btn").addEventListener("click", saveSettings);
     $("#skip-step-wifi").addEventListener("change", onSkipWifiToggle);
     $("#skip-step-folder").addEventListener("change", onSkipFolderToggle);
+    for (const r of $$('input[name="run-mode"]')) {
+        r.addEventListener("change", () => {
+            updateStartButtons();
+            renderRunButtonLabel();
+        });
+    }
     for (const btn of $$(".pw-toggle")) {
         btn.addEventListener("click", (e) => {
             e.preventDefault();
@@ -78,6 +83,20 @@ function wireControls() {
             togglePasswordVisibility(btn);
         });
     }
+    renderRunButtonLabel();
+}
+
+function currentMode() {
+    const checked = document.querySelector('input[name="run-mode"]:checked');
+    return checked ? checked.value : "start";
+}
+
+function renderRunButtonLabel() {
+    const btn = $("#run-btn");
+    if (!btn) return;
+    btn.textContent = currentMode() === "update"
+        ? "Update all boards"
+        : "Run on all boards";
 }
 
 function togglePasswordVisibility(btn) {
@@ -400,36 +419,42 @@ function updateStartButtons() {
     const haveDevices = state.devices.length > 0;
     const haveFolder = !!state.upload;
     const idle = state.runId === null;
+    const mode = currentMode();
 
     const step1ok = state.wifiOk || state.skipStep1;
     const step2ok = haveFolder || state.skipStep2;
 
-    const startReady = haveDevices && idle && step1ok && step2ok;
-    // Update All never pushes WiFi creds / app / properties, so it works as
-    // long as devices are connected. WiFi being unset is fine — the device
-    // uses whatever creds were previously pushed.
-    const updateReady = haveDevices && idle;
+    // In "update" mode we don't push WiFi creds/app/properties, so only devices
+    // being connected matters. In "start" (full setup) mode we need steps 1+2
+    // to be satisfied (or skipped).
+    const ready = mode === "update"
+        ? (haveDevices && idle)
+        : (haveDevices && idle && step1ok && step2ok);
 
-    $("#start-btn").disabled = !startReady;
-    $("#update-btn").disabled = !updateReady;
-
-    $("#start-btn").title = startReady
-        ? "Push app (if not skipped), configure WiFi, run setup + post-update"
-        : missingFor("start", haveDevices, step1ok, step2ok, idle);
-    $("#update-btn").title = updateReady
-        ? "Re-run setup script on all boards (no app push, no WiFi change)"
-        : (idle ? "Connect at least one UNO Q" : "A run is in progress");
+    const btn = $("#run-btn");
+    btn.disabled = !ready;
+    if (ready) {
+        btn.title = mode === "update"
+            ? "Re-run setup script on all boards (no app push, no WiFi change)"
+            : "Push app (if not skipped), configure WiFi, run setup + post-update";
+    } else if (!idle) {
+        btn.title = "A run is in progress";
+    } else if (!haveDevices) {
+        btn.title = "Connect at least one UNO Q";
+    } else {
+        btn.title = missingFor(mode, haveDevices, step1ok, step2ok, idle);
+    }
 
     updateRunStepState();
 }
 
-function missingFor(kind, haveDevices, step1ok, step2ok, idle) {
+function missingFor(mode, haveDevices, step1ok, step2ok, idle) {
     if (!idle) return "A run is in progress";
     const missing = [];
     if (!haveDevices) missing.push("connect at least one UNO Q");
-    if (!step1ok) missing.push("configure WiFi or check 'Skip' in Step 1");
-    if (kind === "start" && !step2ok) {
-        missing.push("choose a folder or check 'Skip' in Step 2");
+    if (mode !== "update") {
+        if (!step1ok) missing.push("configure WiFi or check 'Skip' in Step 1");
+        if (!step2ok) missing.push("choose a folder or check 'Skip' in Step 2");
     }
     return missing.length ? "Needed: " + missing.join("; ") : "";
 }
@@ -606,6 +631,7 @@ function openWs(runId) {
     ws.onclose = () => {
         $("#run-status").textContent = `run ${runId} finished`;
         state.runId = null;
+        for (const serial of state.cards.keys()) stopLiveTimer(serial);
         updateStartButtons();
         hideRunProgress();
     };
@@ -622,7 +648,7 @@ function handleEvent(ev) {
             c.retryBtn.hidden = true;
             c.failureEl.hidden = true;
             c.summaryEl.hidden = true;
-            c.elapsedEl.hidden = true;
+            startLiveTimer(ev.device);
             break;
         }
         case "stage": {
@@ -664,12 +690,14 @@ function handleEvent(ev) {
         case "device_finished": {
             const c = state.cards.get(ev.device);
             if (!c) return;
+            stopLiveTimer(ev.device);
             c.badgeEl.dataset.status = ev.result;
             c.badgeEl.textContent = ev.result;
             c.stageEl.textContent = ev.result;
             if (ev.elapsed_seconds != null) {
                 const t = Math.round(ev.elapsed_seconds);
-                c.elapsedEl.textContent = `${Math.floor(t / 60)}m ${String(t % 60).padStart(2, "0")}s`;
+                c.elapsedEl.textContent = formatElapsed(t);
+                c.elapsedEl.dataset.state = "final";
                 c.elapsedEl.hidden = false;
             }
             if (ev.failure_reason) {
@@ -716,6 +744,7 @@ function resetAllCards() {
 function resetCard(serial) {
     const c = state.cards.get(serial);
     if (!c) return;
+    stopLiveTimer(serial);
     c.badgeEl.dataset.status = "idle";
     c.badgeEl.textContent = "idle";
     c.progressEl.style.width = "0%";
@@ -725,6 +754,36 @@ function resetCard(serial) {
     c.failureEl.hidden = true;
     c.summaryEl.hidden = true;
     c.elapsedEl.hidden = true;
+    c.elapsedEl.dataset.state = "";
+}
+
+// ---------- per-device live elapsed timer ----------
+
+function formatElapsed(seconds) {
+    const t = Math.max(0, Math.floor(seconds));
+    return `${Math.floor(t / 60)}m ${String(t % 60).padStart(2, "0")}s`;
+}
+
+function startLiveTimer(serial) {
+    const c = state.cards.get(serial);
+    if (!c) return;
+    stopLiveTimer(serial);
+    const startedAt = performance.now();
+    c.elapsedEl.hidden = false;
+    c.elapsedEl.dataset.state = "live";
+    c.elapsedEl.textContent = formatElapsed(0);
+    const timerId = setInterval(() => {
+        const secs = (performance.now() - startedAt) / 1000;
+        c.elapsedEl.textContent = formatElapsed(secs);
+    }, 1000);
+    c.timerId = timerId;
+}
+
+function stopLiveTimer(serial) {
+    const c = state.cards.get(serial);
+    if (!c || !c.timerId) return;
+    clearInterval(c.timerId);
+    c.timerId = null;
 }
 
 init();
