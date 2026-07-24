@@ -9,6 +9,13 @@ with live per-device logs and real-time status. Replaces the original
 
 ## Prerequisites
 
+### Hardware
+
+* [Amazon Basics 10 Port USB A Hub](https://www.amazon.es/-/en/Amazon-Basics-10-Port-Power-Adapter/dp/B076YRSWGW)
+* 10 USB-A to USB-C cables
+
+### Software
+
 - **Python 3.11+**
 - **adb** (Android platform-tools) on your `PATH`
   - macOS: `brew install android-platform-tools`
