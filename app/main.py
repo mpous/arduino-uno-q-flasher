@@ -248,6 +248,40 @@ write_sysfs "$LED/brightness" 0
 exit 0
 """
 
+WIFI_CHECK_CMD = r"""
+set +e
+echo "[wifi-check] whoami: $(whoami)"
+echo "[wifi-check] timestamp: $(date -Is 2>/dev/null || date)"
+
+echo "[wifi-check] nmcli device status:"
+nmcli device status 2>&1
+
+SSID=$(nmcli -t -f active,ssid dev wifi 2>/dev/null | awk -F: '$1=="yes"{print $2; exit}')
+if [ -n "$SSID" ]; then
+    echo "[wifi-check] connected_ssid: $SSID"
+else
+    echo "[wifi-check] connected_ssid: (none)"
+fi
+
+echo "[wifi-check] ip route default:"
+ip route 2>/dev/null | grep '^default' || echo "(no default route)"
+
+echo "[wifi-check] dns lookup downloads.arduino.cc:"
+if nslookup downloads.arduino.cc >/dev/null 2>&1; then
+    echo "ok"
+else
+    echo "failed"
+fi
+
+echo "[wifi-check] http reachability https://downloads.arduino.cc:"
+if curl -s --max-time 5 --head https://downloads.arduino.cc >/dev/null 2>&1; then
+    echo "ok"
+    exit 0
+fi
+echo "failed"
+exit 1
+"""
+
 
 @app.post("/api/devices/{serial}/identify")
 async def identify_device(serial: str) -> dict:
@@ -263,6 +297,19 @@ async def identify_device(serial: str) -> dict:
             detail=f"adb shell exited {rc}.\n{out}",
         )
     return {"ok": True, "output": out}
+
+
+@app.post("/api/devices/{serial}/wifi-check")
+async def wifi_check_device(serial: str) -> dict:
+    try:
+        rc, out = await adb.shell(serial, WIFI_CHECK_CMD)
+    except adb.AdbNotFoundError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    return {
+        "ok": rc == 0,
+        "exit_code": rc,
+        "output": out,
+    }
 
 
 @app.post("/api/upload")
@@ -357,6 +404,7 @@ async def start_run(req: StartRunRequest) -> dict:
         unoq_default_password=os.environ.get("UNOQ_DEFAULT_PASSWORD"),
         project_root=PROJECT_ROOT,
         post_update_cmd=(req.post_update_cmd or "").strip() or None,
+        prune_docker_before_post_update=req.prune_docker_before_post_update,
     )
     run = registry.create_run(ctx, upload)
 

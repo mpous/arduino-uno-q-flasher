@@ -66,6 +66,100 @@ fi
 log "Updating PATH..."
 export PATH=$PATH:/usr/bin:/bin:/usr/local/bin
 
+SUDO_MODE="unknown"
+SUDO_PW=""
+
+resolve_sudo_mode() {
+    if [ "$SUDO_MODE" != "unknown" ]; then
+        return 0
+    fi
+
+    if sudo -n true >/dev/null 2>&1; then
+        SUDO_MODE="nopass"
+        log "sudo check: non-interactive sudo is available"
+        return 0
+    fi
+
+    for CANDIDATE in "${UNOQ_DEFAULT_PASSWORD:-}" "arduino"; do
+        [ -z "$CANDIDATE" ] && continue
+        if printf '%s\n' "$CANDIDATE" | sudo -S -k -p '' true >/dev/null 2>&1; then
+            SUDO_MODE="password"
+            SUDO_PW="$CANDIDATE"
+            if [ "$CANDIDATE" = "arduino" ]; then
+                log "sudo check: using fallback sudo password candidate 'arduino'"
+            else
+                log "sudo check: using configured device password"
+            fi
+            return 0
+        fi
+    done
+
+    SUDO_MODE="none"
+    log "WARNING: sudo is not available non-interactively; privileged maintenance steps will be skipped."
+}
+
+run_sudo_cmd() {
+    local cmd="$1"
+
+    resolve_sudo_mode
+
+    if [ "$SUDO_MODE" = "nopass" ]; then
+        sudo -n bash -lc "$cmd"
+        return $?
+    fi
+
+    if [ "$SUDO_MODE" = "password" ]; then
+        printf '%s\n' "$SUDO_PW" | sudo -S -k -p '' bash -lc "$cmd"
+        return $?
+    fi
+
+    return 1
+}
+
+run_and_log() {
+    local tag="$1"
+    shift
+    "$@" 2>&1 | while IFS= read -r L; do log "  [$tag] $L"; done
+    return ${PIPESTATUS[0]}
+}
+
+get_free_mb() {
+    local avail_kb
+    avail_kb=$(df -Pk / | awk 'NR==2 {print $4}')
+    echo $((avail_kb / 1024))
+}
+
+cleanup_before_updates() {
+    log "Running pre-update cleanup (docker/apt caches) to avoid disk-full failures..."
+    local before_mb after_mb
+    before_mb=$(get_free_mb)
+    log "Free space before cleanup: ${before_mb}MB"
+
+    if command -v docker >/dev/null 2>&1; then
+        run_and_log "docker" docker system df || true
+        run_and_log "docker" docker container prune -f || true
+        run_and_log "docker" docker image prune -a -f || true
+        run_and_log "docker" docker system df || true
+    elif command -v podman >/dev/null 2>&1; then
+        run_and_log "podman" podman system df || true
+        run_and_log "podman" podman container prune -f || true
+        run_and_log "podman" podman image prune -a -f || true
+        run_and_log "podman" podman system df || true
+    else
+        log "No docker/podman runtime found for prune."
+    fi
+
+    if resolve_sudo_mode && [ "$SUDO_MODE" != "none" ]; then
+        run_and_log "apt" run_sudo_cmd "apt-get clean" || true
+        run_and_log "apt" run_sudo_cmd "rm -rf /var/lib/apt/lists/partial/*" || true
+    else
+        log "Skipping apt cache cleanup (sudo unavailable)."
+    fi
+
+    after_mb=$(get_free_mb)
+    log "Free space after cleanup: ${after_mb}MB"
+}
+
 # ── WiFi ──────────────────────────────────────────────────────────────────────
 
 # On UNO Q the WiFi radio is sometimes soft-blocked (rfkill) and/or disabled in
@@ -250,8 +344,47 @@ else
     log "No /home/arduino/ArduinoApps directory; skipping .eim permission step."
 fi
 
+# ── Remediate broken apt state ────────────────────────────────────────────────
+# If a previous run called `arduino-app-cli system update` without
+# --only-arduino it can pull in a Debian alsa-ucm-conf (1.2.14-1) that
+# conflicts with Arduino's libasound2t64, breaking all future apt operations.
+# Detection: the installed alsa-ucm-conf version lacks the Arduino suffix.
+cleanup_before_updates
+
+FREE_MB=$(get_free_mb)
+if [ "$FREE_MB" -lt 300 ]; then
+    add_error "Only ${FREE_MB}MB free on / after cleanup. Need at least 300MB for package index updates."
+    exit 1
+fi
+
+ALSA_VERSION=$(dpkg-query -W -f='${Version}' alsa-ucm-conf 2>/dev/null || true)
+if echo "$ALSA_VERSION" | grep -qE '^1\.2\.14-1$'; then
+    log "Detected broken alsa-ucm-conf ($ALSA_VERSION). Running apt remediation..."
+    resolve_sudo_mode
+    if [ "$SUDO_MODE" = "none" ]; then
+        add_error "Cannot run apt remediation: sudo unavailable. Please set UNOQ_DEFAULT_PASSWORD to the board's current sudo password or reflash."
+        exit 1
+    fi
+
+    run_and_log "dpkg" run_sudo_cmd "dpkg --configure -a" || true
+    run_and_log "apt-get update" run_sudo_cmd "apt-get update" || true
+
+    log "  Attempting Arduino-pinned package repair..."
+    if ! run_and_log "apt" run_sudo_cmd "apt-get install -y -o Dpkg::Options::=--force-overwrite alsa-ucm-conf=1.2.14-1qcom0.1arduino3 arduino-app-cli arduino-unoq-config arduino-unoq"; then
+        log "  Arduino-pinned repair failed; retrying generic repair..."
+        run_and_log "apt" run_sudo_cmd "apt-get install -y -o Dpkg::Options::=--force-overwrite arduino-app-cli arduino-unoq-config arduino-unoq" || true
+    fi
+
+    log "Remediation complete. Running Arduino-only system update..."
+    if ! arduino-app-cli system update --yes --only-arduino; then
+        add_error "arduino-app-cli system update (remediation) failed"
+    fi
+else
+    log "apt state looks healthy (alsa-ucm-conf=${ALSA_VERSION:-not installed})."
+fi
+
 # ── System update ─────────────────────────────────────────────────────────────
 log "Running arduino-app-cli system update..."
-if ! arduino-app-cli system update --yes; then
+if ! arduino-app-cli system update --yes --only-arduino; then
    add_error "arduino-app-cli system update failed"
 fi
