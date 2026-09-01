@@ -9,16 +9,7 @@ const STAGES = [
     "change_password",
     "push_properties",
     "run_setup",
-    "post_update",
-];
-
-// Stages Update All skips: everything except push_setup_script, chmod_script,
-// run_setup. The user wants Update All to "just rerun the setup script" (no
-// app push, no env push, no password change, no properties, no post-update).
-const UPDATE_SKIP_STAGES = [
-    "push_env",
-    "change_password",
-    "push_properties",
+    "prune_docker_images",
     "post_update",
 ];
 
@@ -42,7 +33,7 @@ const state = {
     skipStep1: false,
     skipStep2: false,
 
-    runMode: null,
+    runFinalStatusText: null,
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -64,16 +55,22 @@ function wireControls() {
         refreshHealth();
         refreshDevices();
     });
-    $("#run-btn").addEventListener("click", () => startRun(currentMode()));
+    $("#wifi-check-all-btn")?.addEventListener("click", wifiCheckAllDevices);
+    $("#run-btn").addEventListener("click", () => startRun());
     $("#save-settings-btn").addEventListener("click", saveSettings);
     $("#skip-step-wifi").addEventListener("change", onSkipWifiToggle);
     $("#skip-step-folder").addEventListener("change", onSkipFolderToggle);
-    for (const r of $$('input[name="run-mode"]')) {
-        r.addEventListener("change", () => {
-            updateStartButtons();
-            renderRunButtonLabel();
-        });
+    for (const id of [
+        "#run-step-wifi",
+        "#run-step-app",
+        "#run-step-setup",
+        "#run-step-prune",
+        "#run-step-post-update",
+    ]) {
+        const el = $(id);
+        if (el) el.addEventListener("change", updateStartButtons);
     }
+    $("#post-update-cmd")?.addEventListener("input", updateStartButtons);
     for (const btn of $$(".pw-toggle")) {
         btn.addEventListener("click", (e) => {
             e.preventDefault();
@@ -81,20 +78,6 @@ function wireControls() {
             togglePasswordVisibility(btn);
         });
     }
-    renderRunButtonLabel();
-}
-
-function currentMode() {
-    const checked = document.querySelector('input[name="run-mode"]:checked');
-    return checked ? checked.value : "start";
-}
-
-function renderRunButtonLabel() {
-    const btn = $("#run-btn");
-    if (!btn) return;
-    btn.textContent = currentMode() === "update"
-        ? "Update all boards"
-        : "Run on all boards";
 }
 
 function togglePasswordVisibility(btn) {
@@ -306,18 +289,28 @@ function renderDeviceGrid() {
         const logEl = node.querySelector(".log-panel");
         const retryBtn = node.querySelector(".retry-btn");
         const identifyBtn = node.querySelector(".identify-btn");
+        const wifiCheckBtn = node.querySelector(".wifi-check-btn");
+        const wifiBadgeEl = node.querySelector(".wifi-badge");
         const elapsedEl = node.querySelector(".elapsed");
         const failureEl = node.querySelector(".failure-reason");
         const summaryEl = node.querySelector(".summary-panel");
         const skipInputs = Array.from(node.querySelectorAll(".skip-toggle"));
 
+        const logFollowState = { follow: true };
+        logEl.addEventListener("scroll", () => {
+            const nearBottom =
+                (logEl.scrollTop + logEl.clientHeight) >= (logEl.scrollHeight - 12);
+            logFollowState.follow = nearBottom;
+        });
+
         retryBtn.addEventListener("click", () => retryDevice(d.serial));
         identifyBtn.addEventListener("click", () => identifyDevice(d.serial));
+        wifiCheckBtn.addEventListener("click", () => wifiCheckDevice(d.serial));
 
         grid.appendChild(node);
         state.cards.set(d.serial, {
             card: node, badgeEl, progressEl, stageEl, logEl, retryBtn, identifyBtn,
-            elapsedEl, failureEl, summaryEl, skipInputs,
+            wifiCheckBtn, wifiBadgeEl, elapsedEl, failureEl, summaryEl, skipInputs, logFollowState,
         });
     }
 
@@ -417,43 +410,72 @@ function updateStartButtons() {
     const haveDevices = state.devices.length > 0;
     const haveFolder = !!state.upload;
     const idle = state.runId === null;
-    const mode = currentMode();
+    const doWifi = !!$("#run-step-wifi")?.checked;
+    const doApp = !!$("#run-step-app")?.checked;
+    const doSetup = !!$("#run-step-setup")?.checked;
+    const doPost = !!$("#run-step-post-update")?.checked;
+    const doPrune = !!$("#run-step-prune")?.checked;
+    const postCmd = (($("#post-update-cmd")?.value) || "").trim();
 
     const step1ok = state.wifiOk || state.skipStep1;
     const step2ok = haveFolder || state.skipStep2;
 
-    // In "update" mode we don't push WiFi creds/app/properties, so only devices
-    // being connected matters. In "start" (full setup) mode we need steps 1+2
-    // to be satisfied (or skipped).
-    const ready = mode === "update"
-        ? (haveDevices && idle)
-        : (haveDevices && idle && step1ok && step2ok);
+    const needsStep1Inputs = doWifi && !state.skipStep1;
+    const needsStep2Inputs = doApp && !state.skipStep2;
+    const needsPostCommand = doPost;
+    const ready = haveDevices
+        && idle
+        && (!needsStep1Inputs || step1ok)
+        && (!needsStep2Inputs || step2ok)
+        && (!needsPostCommand || postCmd.length > 0);
 
     const btn = $("#run-btn");
     btn.disabled = !ready;
     if (ready) {
-        btn.title = mode === "update"
-            ? "Re-run setup script on all boards (no app push, no WiFi change)"
-            : "Push app (if not skipped), configure WiFi, run setup + post-update";
+        const selected = ["run setup"];
+        if (doWifi && !state.skipStep1) selected.unshift("WiFi/password");
+        if (doApp && !state.skipStep2) selected.unshift("app push");
+        if (!doSetup) selected.splice(selected.indexOf("run setup"), 1);
+        if (doPrune) selected.push("docker prune");
+        if (doPost) selected.push("post-update");
+        if (selected.length === 0) selected.push("no-op");
+        btn.title = `Run selected steps: ${selected.join(", ")}`;
     } else if (!idle) {
         btn.title = "A run is in progress";
     } else if (!haveDevices) {
         btn.title = "Connect at least one UNO Q";
     } else {
-        btn.title = missingFor(mode, haveDevices, step1ok, step2ok, idle);
+        btn.title = missingFor({
+            haveDevices,
+            step1ok,
+            step2ok,
+            idle,
+            needsStep1Inputs,
+            needsStep2Inputs,
+            needsPostCommand,
+            postCmd,
+        });
     }
 
     updateRunStepState();
 }
 
-function missingFor(mode, haveDevices, step1ok, step2ok, idle) {
+function missingFor({
+    haveDevices,
+    step1ok,
+    step2ok,
+    idle,
+    needsStep1Inputs,
+    needsStep2Inputs,
+    needsPostCommand,
+    postCmd,
+}) {
     if (!idle) return "A run is in progress";
     const missing = [];
     if (!haveDevices) missing.push("connect at least one UNO Q");
-    if (mode !== "update") {
-        if (!step1ok) missing.push("configure WiFi or check 'Skip' in Step 1");
-        if (!step2ok) missing.push("choose a folder or check 'Skip' in Step 2");
-    }
+    if (needsStep1Inputs && !step1ok) missing.push("configure WiFi or uncheck Step 1 in Run");
+    if (needsStep2Inputs && !step2ok) missing.push("choose a folder or uncheck Step 2 in Run");
+    if (needsPostCommand && !postCmd) missing.push("set Post-update command or uncheck Step 5 in Run");
     return missing.length ? "Needed: " + missing.join("; ") : "";
 }
 
@@ -476,28 +498,40 @@ function updateRunStepState(override) {
         stateEl.textContent = "no boards detected";
         return;
     }
-    const ready = state.wifiOk;
+    const doWifi = !!$("#run-step-wifi")?.checked;
+    const doApp = !!$("#run-step-app")?.checked;
+    const doSetup = !!$("#run-step-setup")?.checked;
+    const doPrune = !!$("#run-step-prune")?.checked;
+    const doPost = !!$("#run-step-post-update")?.checked;
+    const ready = (!doWifi || state.wifiOk || state.skipStep1);
     step.dataset.status = ready ? "ready" : "pending";
-    const folderPart = state.upload
-        ? `folder: ${state.upload.folder_name}`
-        : "no folder";
-    stateEl.textContent = `${n} board${n === 1 ? "" : "s"} · ${folderPart}`;
+    const selected = [];
+    if (doWifi && !state.skipStep1) selected.push("step 1");
+    if (doApp && !state.skipStep2) selected.push("step 2");
+    if (doSetup) selected.push("step 3");
+    if (doPrune) selected.push("step 4");
+    if (doPost) selected.push("step 5");
+    if (selected.length === 0) selected.push("no-op");
+    stateEl.textContent = `${n} board${n === 1 ? "" : "s"} · ${selected.join(", ")}`;
 }
 
 // ---------- runs ----------
 
-async function startRun(mode /* 'start' | 'update' */) {
+async function startRun() {
     if (state.devices.length === 0) return;
-    state.runMode = mode;
+    state.runFinalStatusText = null;
 
-    let baseSkip;
-    if (mode === "update") {
-        baseSkip = [...UPDATE_SKIP_STAGES];
-    } else {
-        baseSkip = [];
-        if (state.skipStep1) baseSkip.push(...SKIP_STEP_WIFI_STAGES);
-        if (state.skipStep2) baseSkip.push(...SKIP_STEP_FOLDER_STAGES);
-    }
+    const doWifi = !!$("#run-step-wifi")?.checked;
+    const doApp = !!$("#run-step-app")?.checked;
+    const doSetup = !!$("#run-step-setup")?.checked;
+    const doPostUpdate = !!$("#run-step-post-update")?.checked;
+    const doPrune = !!$("#run-step-prune")?.checked;
+
+    const baseSkip = [];
+    if (!doWifi || state.skipStep1) baseSkip.push(...SKIP_STEP_WIFI_STAGES);
+    if (!doApp || state.skipStep2) baseSkip.push("push_app", ...SKIP_STEP_FOLDER_STAGES);
+    if (!doSetup) baseSkip.push("push_setup_script", "chmod_script", "run_setup");
+    if (!doPostUpdate) baseSkip.push("post_update");
 
     const devices = state.devices.map((d) => {
         const userSkip = collectSkip(d.serial);
@@ -505,13 +539,13 @@ async function startRun(mode /* 'start' | 'update' */) {
         return { serial: d.serial, skip_stages: skip };
     });
 
-    const postUpdateCmd = mode === "update"
-        ? ""
-        : ($("#post-update-cmd").value || "").trim();
+    const postUpdateCmd = doPostUpdate
+        ? (($("#post-update-cmd").value || "").trim())
+        : "";
+    const pruneDockerBeforePostUpdate = doPrune;
 
-    // Update All never sends the upload. Start All omits it too when step 2
-    // is skipped.
-    const sendUpload = mode !== "update" && !state.skipStep2 && state.upload;
+    // Only send upload when Step 2 is selected and not skipped.
+    const sendUpload = doApp && !state.skipStep2 && state.upload;
 
     resetAllCards();
 
@@ -522,6 +556,7 @@ async function startRun(mode /* 'start' | 'update' */) {
             upload_id: sendUpload ? state.upload.upload_id : null,
             devices,
             post_update_cmd: postUpdateCmd || null,
+            prune_docker_before_post_update: pruneDockerBeforePostUpdate,
         }),
     });
     if (!r.ok) {
@@ -531,8 +566,7 @@ async function startRun(mode /* 'start' | 'update' */) {
     }
     const j = await r.json();
     state.runId = j.run_id;
-    $("#run-status").textContent =
-        `${mode === "update" ? "Update" : "Run"} ${j.run_id} in progress…`;
+    $("#run-status").textContent = `Run ${j.run_id} in progress…`;
     updateStartButtons();
     openWs(j.run_id);
 }
@@ -546,11 +580,6 @@ function collectSkip(serial) {
 async function retryDevice(serial) {
     if (!state.runId) return;
     const skip = collectSkip(serial);
-    if (state.runMode === "update") {
-        for (const s of UPDATE_SKIP_STAGES) {
-            if (!skip.includes(s)) skip.push(s);
-        }
-    }
     resetCard(serial);
     const r = await fetch(`/api/runs/${state.runId}/devices/${serial}/retry`, {
         method: "POST",
@@ -586,6 +615,81 @@ async function identifyDevice(serial) {
     }
 }
 
+async function wifiCheckDevice(serial) {
+    const c = state.cards.get(serial);
+    if (!c) return;
+    const btn = c.wifiCheckBtn;
+    const prevText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = "Checking…";
+    setWifiBadge(c, "unknown", "checking...");
+    appendLog(serial, "--- wifi check started ---", "info");
+    try {
+        const r = await fetch(`/api/devices/${encodeURIComponent(serial)}/wifi-check`, {
+            method: "POST",
+        });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) {
+            appendLog(serial, `wifi check failed: ${j.detail || r.status}`, "err");
+            return;
+        }
+
+        const out = String(j.output || "").trim();
+        if (out) {
+            for (const line of out.split("\n")) {
+                appendLog(serial, line, "info");
+            }
+        }
+        appendLog(
+            serial,
+            j.ok
+                ? "--- wifi check passed ---"
+                : `--- wifi check failed (exit ${j.exit_code}) ---`,
+            j.ok ? "info" : "err",
+        );
+        if (j.ok) {
+            setWifiBadge(c, "pass", "connectivity check passed");
+        } else {
+            setWifiBadge(c, "fail", `connectivity check failed (exit ${j.exit_code})`);
+        }
+    } catch (err) {
+        setWifiBadge(c, "fail", "connectivity check error");
+        appendLog(serial, `wifi check error: ${err}`, "err");
+    } finally {
+        btn.disabled = false;
+        btn.textContent = prevText;
+    }
+}
+
+async function wifiCheckAllDevices() {
+    const btn = $("#wifi-check-all-btn");
+    if (!btn) return;
+    const serials = state.devices.map((d) => d.serial).filter((s) => state.cards.has(s));
+    if (serials.length === 0) {
+        $("#run-status").textContent = "No connected boards to check";
+        return;
+    }
+
+    const prevText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = `Checking ${serials.length} board${serials.length === 1 ? "" : "s"}…`;
+
+    const results = await Promise.allSettled(serials.map((serial) => wifiCheckDevice(serial)));
+    const passed = serials.filter((serial) => {
+        const c = state.cards.get(serial);
+        return c?.wifiBadgeEl?.dataset?.status === "pass";
+    }).length;
+    const failed = serials.length - passed;
+
+    const rejected = results.filter((r) => r.status === "rejected").length;
+    $("#run-status").textContent = rejected > 0
+        ? `WiFi checks complete: ${passed} passed, ${failed} failed (${rejected} request error${rejected === 1 ? "" : "s"})`
+        : `WiFi checks complete: ${passed} passed, ${failed} failed`;
+
+    btn.disabled = false;
+    btn.textContent = prevText;
+}
+
 // ---------- WebSocket ----------
 
 function openWs(runId) {
@@ -598,7 +702,12 @@ function openWs(runId) {
         handleEvent(ev);
     };
     ws.onclose = () => {
-        $("#run-status").textContent = `run ${runId} finished`;
+        if (state.runId !== null && !state.runFinalStatusText) {
+            $("#run-status").textContent =
+                `run ${runId} disconnected before completion`; 
+        } else if (state.runFinalStatusText) {
+            $("#run-status").textContent = state.runFinalStatusText;
+        }
         state.runId = null;
         for (const serial of state.cards.keys()) stopLiveTimer(serial);
         updateStartButtons();
@@ -615,7 +724,12 @@ function handleEvent(ev) {
             c.badgeEl.textContent = "running";
             c.retryBtn.hidden = true;
             c.failureEl.hidden = true;
-            c.summaryEl.hidden = true;
+            c.summaryEl.hidden = false;
+            c.summary = makeSummaryState();
+            c.summary.overallStatus = "running";
+            c.summary.overallText = "running";
+            c.summary.phase = "starting update";
+            renderSummary(c);
             startLiveTimer(ev.device);
             break;
         }
@@ -628,9 +742,14 @@ function handleEvent(ev) {
             c.badgeEl.dataset.status = "running";
             c.badgeEl.textContent = `retry ${ev.attempt}/${ev.max_attempts}`;
             c.failureEl.hidden = true;
-            c.summaryEl.hidden = true;
+            c.summaryEl.hidden = false;
+            c.summary = makeSummaryState();
+            c.summary.overallStatus = "running";
+            c.summary.overallText = "running";
+            c.summary.phase = `retrying (${ev.attempt}/${ev.max_attempts})`;
             c.progressEl.style.width = "0%";
             c.stageEl.textContent = "retrying…";
+            renderSummary(c);
             appendLog(
                 ev.device,
                 `--- retry attempt ${ev.attempt}/${ev.max_attempts}${ev.reason ? " · " + ev.reason : ""} ---`,
@@ -647,12 +766,19 @@ function handleEvent(ev) {
                 : (idx / STAGES.length) * 100;
             c.progressEl.style.width = `${pct}%`;
             c.stageEl.textContent = `${ev.stage} · ${ev.status}`;
+            updateSummaryFromStage(c, ev.stage, ev.status);
+            renderSummary(c);
             appendLog(ev.device, `[${ev.stage}] ${ev.status}`, "stage");
             break;
         }
         case "log": {
             const cls = ev.stream === "stderr" ? "err" : "";
             const prefix = ev.stage ? `[${ev.stage}] ` : "";
+            const c = state.cards.get(ev.device);
+            if (c) {
+                collectSummaryWarnings(c, ev);
+                renderSummary(c);
+            }
             appendLog(ev.device, prefix + ev.line, cls);
             break;
         }
@@ -660,18 +786,13 @@ function handleEvent(ev) {
             const c = state.cards.get(ev.device);
             if (!c) return;
             c.summaryEl.hidden = false;
-            c.summaryEl.querySelector(".summary-status").dataset.status = ev.status;
-            c.summaryEl.querySelector(".summary-status").textContent = ev.status;
-            const t = ev.elapsed_seconds;
-            c.summaryEl.querySelector(".summary-time").textContent =
-                t == null ? "—" : `${Math.floor(t / 60)}m ${String(t % 60).padStart(2, "0")}s`;
-            const ul = c.summaryEl.querySelector(".summary-errors");
-            ul.innerHTML = "";
-            for (const err of ev.errors || []) {
-                const li = document.createElement("li");
-                li.textContent = err;
-                ul.appendChild(li);
-            }
+            c.summary.setupStatus = ev.status;
+            c.summary.setupTime = ev.elapsed_seconds;
+            c.summary.setupErrors = Array.isArray(ev.errors) ? ev.errors : [];
+            c.summary.phase = ev.status === "SUCCESS"
+                ? "setup script succeeded, continuing"
+                : "setup script reported failure";
+            renderSummary(c);
             break;
         }
         case "device_finished": {
@@ -696,15 +817,143 @@ function handleEvent(ev) {
             } else {
                 c.progressEl.style.width = "100%";
             }
+            c.summaryEl.hidden = false;
+            c.summary.overallStatus = ev.result;
+            c.summary.overallText = ev.result === "success" ? "complete" : "failed";
+            c.summary.phase = ev.result === "success"
+                ? "all stages finished"
+                : `failed${ev.failure_reason ? ": " + ev.failure_reason : ""}`;
+            if (c.summary.postUpdate.status === "pending") {
+                c.summary.postUpdate = {
+                    status: "skipped",
+                    text: "not run",
+                };
+            }
+            renderSummary(c);
             break;
         }
         case "run_finished": {
-            $("#run-status").textContent =
-                `done · ${ev.successful.length} ok, ${ev.failed.length} failed`;
+            state.runFinalStatusText =
+                `run complete · ${ev.successful.length} ok, ${ev.failed.length} failed`;
+            $("#run-status").textContent = state.runFinalStatusText;
             state.runId = null;
             updateStartButtons();
             break;
         }
+    }
+}
+
+function makeSummaryState() {
+    return {
+        overallStatus: "running",
+        overallText: "running",
+        phase: "waiting for first stage",
+        setupStatus: "—",
+        setupTime: null,
+        setupErrors: [],
+        postUpdate: {
+            status: "pending",
+            text: "pending",
+        },
+        warnings: [],
+    };
+}
+
+function updateSummaryFromStage(c, stage, status) {
+    if (!c.summary) c.summary = makeSummaryState();
+
+    if (stage === "run_setup" && status === "started") {
+        c.summary.phase = "running setup script";
+    } else if (stage === "run_setup" && (status === "completed" || status === "skipped")) {
+        c.summary.phase = "setup script done, finalizing";
+    } else if (stage === "run_setup" && status === "failed") {
+        c.summary.phase = "setup script failed";
+    }
+
+    if (stage === "post_update") {
+        if (status === "started") {
+            c.summary.postUpdate = { status: "running", text: "running" };
+            c.summary.phase = "running post-update";
+        } else if (status === "completed") {
+            c.summary.postUpdate = { status: "completed", text: "completed" };
+            c.summary.phase = "post-update complete";
+        } else if (status === "skipped") {
+            c.summary.postUpdate = { status: "skipped", text: "skipped" };
+        } else if (status === "failed") {
+            c.summary.postUpdate = { status: "failed", text: "failed (non-fatal)" };
+            if (!c.summary.warnings.includes("post-update command failed (setup can still pass)")) {
+                c.summary.warnings.push("post-update command failed (setup can still pass)");
+            }
+            c.summary.phase = "post-update failed (non-fatal)";
+        }
+    }
+
+    if (stage === "prune_docker_images") {
+        if (status === "started") {
+            c.summary.phase = "pruning old docker images";
+        } else if (status === "completed") {
+            c.summary.phase = "docker prune complete";
+        } else if (status === "failed") {
+            if (!c.summary.warnings.includes("docker prune failed (continuing)")) {
+                c.summary.warnings.push("docker prune failed (continuing)");
+            }
+            c.summary.phase = "docker prune failed (continuing)";
+        }
+    }
+}
+
+function collectSummaryWarnings(c, ev) {
+    if (!ev || !ev.line || ev.stage !== "change_password") return;
+    if (!c.summary) c.summary = makeSummaryState();
+    const line = String(ev.line).toLowerCase();
+    if (
+        line.includes("authentication token manipulation error") ||
+        line.includes("password unchanged")
+    ) {
+        const warning = "password change did not complete";
+        if (!c.summary.warnings.includes(warning)) c.summary.warnings.push(warning);
+    }
+}
+
+function renderSummary(c) {
+    if (!c || !c.summaryEl) return;
+    if (!c.summary) c.summary = makeSummaryState();
+
+    const overallEl = c.summaryEl.querySelector(".summary-overall");
+    const phaseEl = c.summaryEl.querySelector(".summary-phase");
+    const setupEl = c.summaryEl.querySelector(".summary-status");
+    const timeEl = c.summaryEl.querySelector(".summary-time");
+    const postEl = c.summaryEl.querySelector(".summary-post-update");
+    const warnUl = c.summaryEl.querySelector(".summary-warnings");
+    const errUl = c.summaryEl.querySelector(".summary-errors");
+
+    overallEl.dataset.status = c.summary.overallStatus;
+    overallEl.textContent = c.summary.overallText;
+
+    phaseEl.textContent = c.summary.phase;
+
+    setupEl.dataset.status = c.summary.setupStatus;
+    setupEl.textContent = c.summary.setupStatus;
+
+    const t = c.summary.setupTime;
+    timeEl.textContent =
+        t == null ? "—" : `${Math.floor(t / 60)}m ${String(t % 60).padStart(2, "0")}s`;
+
+    postEl.dataset.status = c.summary.postUpdate.status;
+    postEl.textContent = c.summary.postUpdate.text;
+
+    warnUl.innerHTML = "";
+    for (const warning of c.summary.warnings) {
+        const li = document.createElement("li");
+        li.textContent = `warning: ${warning}`;
+        warnUl.appendChild(li);
+    }
+
+    errUl.innerHTML = "";
+    for (const err of c.summary.setupErrors || []) {
+        const li = document.createElement("li");
+        li.textContent = err;
+        errUl.appendChild(li);
     }
 }
 
@@ -719,7 +968,9 @@ function appendLog(serial, line, cls = "") {
     else if (cls === "info") span.className = "log-info";
     span.textContent = line + "\n";
     c.logEl.appendChild(span);
-    c.logEl.scrollTop = c.logEl.scrollHeight;
+    if (c.logFollowState?.follow !== false) {
+        c.logEl.scrollTop = c.logEl.scrollHeight;
+    }
 }
 
 function resetAllCards() {
@@ -735,11 +986,29 @@ function resetCard(serial) {
     c.progressEl.style.width = "0%";
     c.stageEl.textContent = "—";
     c.logEl.innerHTML = "";
+    if (c.logFollowState) c.logFollowState.follow = true;
     c.retryBtn.hidden = true;
     c.failureEl.hidden = true;
     c.summaryEl.hidden = true;
+    c.summary = makeSummaryState();
+    if (c.wifiBadgeEl) {
+        setWifiBadge(c, "unknown", "No WiFi check yet");
+    }
     c.elapsedEl.hidden = true;
     c.elapsedEl.dataset.state = "";
+}
+
+function setWifiBadge(card, status, title) {
+    if (!card || !card.wifiBadgeEl) return;
+    card.wifiBadgeEl.dataset.status = status;
+    card.wifiBadgeEl.title = title;
+    if (status === "pass") {
+        card.wifiBadgeEl.textContent = "WiFi OK";
+    } else if (status === "fail") {
+        card.wifiBadgeEl.textContent = "WiFi Fail";
+    } else {
+        card.wifiBadgeEl.textContent = "WiFi ?";
+    }
 }
 
 // ---------- per-device live elapsed timer ----------

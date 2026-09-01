@@ -27,17 +27,23 @@ with live per-device logs and real-time status. Replaces the original
   UNOQ_DEFAULT_PASSWORD=your-new-password
   ```
 - Optional **`properties.msgpack`** at the project root or inside the chosen
-  app folder. If present, it is pushed to `/var/lib/arduino-app-cli/properties.msgpack`.
+  app folder. If present, it is pushed to:
+  - `/home/arduino/.local/share/arduino-app-cli/properties.msgpack`
+  - `/tmp/properties.msgpack`
 
 ## Install & run
 
 ```bash
-python -m venv .venv
+# Ensure Python 3.11+ is used for the venv (required by this project).
+# macOS (Homebrew) if missing: brew install python@3.11
+python3.11 -m venv .venv
 # Windows:
 .venv\Scripts\activate
 # macOS/Linux:
 source .venv/bin/activate
 
+# Optional but recommended: modern editable-install support
+python -m pip install --upgrade pip
 pip install -e .
 python -m app
 ```
@@ -48,30 +54,39 @@ Open <http://localhost:8000>.
 
 1. **Connect** your UNO Q boards via USB. The device grid auto-refreshes every
    5 seconds — newly plugged boards appear without needing to click anything.
-   You can also click **Refresh devices** to force an immediate poll.
-2. (Optional) Click **Identify** on any device card to blink that board's red
-   user LED for ~3 seconds — useful when many identical boards sit on the same
-   bench.
+   You can also click **Refresh devices** to force an immediate poll, or
+   **Check WiFi on all boards** to run a quick connectivity test fleet-wide.
+2. (Optional) On each device card:
+   - Click **Identify** to blink that board's red user LED for ~3 seconds.
+   - Click **WiFi Check** to run a per-board network check (SSID, route, DNS,
+     and HTTP reachability).
+   - Watch the WiFi badge update (`WiFi ?` / `WiFi OK` / `WiFi Fail`).
 3. Click **Choose app folder** and pick the folder you want pushed to
    `/home/arduino/ArduinoApps/` on each device. The folder is uploaded once
    and reused for all selected devices. The UI lists any `.eim` model files
    found inside the folder so you can sanity-check the bundle before flashing.
-4. (Optional) Edit the **Post-update command** input. Default is
-   `app start examples:real-time-accelerometer`, which installs example library
-   dependencies on the device. Clear the field to skip this step.
-5. (Optional) Per device, tick **skip password**, **skip properties**, and/or
-   **skip post-update**.
-6. Click **Start all**. Each device card shows:
+4. (Optional) Edit **Post-update commands** as a multiline textbox.
+   - One command per line.
+   - Blank lines are ignored.
+   - Lines starting with `#` are treated as comments.
+   - Commands run in order and stop on first failure.
+5. In **Step 3 / Run**, select exactly which steps to run using checkboxes
+   (Step 1..Step 5) for this batch.
+6. (Optional) Per device, tick **skip password**, **skip properties**, and/or
+   **skip post-update** for fine-grained overrides.
+7. Click **Run selected steps on all boards**. Each device card shows:
    - status badge (idle / running / success / failed)
-   - progress bar across the 8 stages
+   - progress bar across the workflow stages (selected steps show as run,
+     skipped ones are marked skipped)
    - live-tailing log panel
-7. If a device fails, click **Retry** on its card.
+8. If a device fails, click **Retry** on its card.
 
 The staged upload is removed from disk automatically once the run finishes.
 
 ## Workflow (per device)
 
-The web app runs an 8-step workflow:
+The web app has a 9-stage workflow. Any stage can be skipped by Step 3
+selection (or per-device skip toggles where applicable):
 
 1. `push_app` — push chosen folder to `/home/arduino/ArduinoApps/`
 2. `push_setup_script` — push `unoq-setup.sh` to `/home/arduino/.unoq-setup.sh`
@@ -79,12 +94,15 @@ The web app runs an 8-step workflow:
 4. `chmod_script` — make the setup script executable
 5. `change_password` — set the arduino user's password from `UNOQ_DEFAULT_PASSWORD`
    (skippable; handles the "already-changed" case gracefully)
-6. `push_properties` — push `properties.msgpack` so on-device setup-wizard markers
-   are in place before setup runs (skippable; skipped if absent)
+6. `push_properties` — push `properties.msgpack` to
+   `/home/arduino/.local/share/arduino-app-cli/` and `/tmp/` so on-device
+   setup-wizard markers are in place before setup runs (skippable; skipped if absent)
 7. `run_setup` — execute the remote setup script (WiFi, DNS, system update)
-8. `post_update` — run the configured post-update command on the device
-   (skippable; skipped if the input is empty). Failures here are logged but
-   do not mark the device as failed, since the flash itself is already done.
+8. `prune_docker_images` — optional cleanup of unused Docker/Podman images and
+   stopped containers before post-update (disabled by default)
+9. `post_update` — run configured post-update commands on the device, one line
+   at a time. Failures here are logged but do not mark the device as failed,
+   since the flash itself is already done.
 
 ## ADB parallelism — how many boards can I flash at once?
 
