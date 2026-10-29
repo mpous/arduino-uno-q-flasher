@@ -71,6 +71,9 @@ UNOQ_SCRIPT="unoq-setup.sh"
 APP_BRICK_DIR="example-arduino-app-lab-object-detection-using-flask"
 PROPERTIES_FILE="properties.msgpack"
 PROPERTIES_TARGET_PATH="/var/lib/arduino-app-cli/properties.msgpack"
+MODEL_BUNDLE_DIR="model-bundles"
+MODELS_TARGET_PATH="/var/lib/arduino-app-cli/models/"
+MODEL_STAGING_PATH="/home/arduino/.unoq-model-bundles"
 if [ ! -d "$APP_BRICK_DIR" ]; then
     echo "Cloning app brick repository on Mac..."
     git clone https://github.com/edgeimpulse/example-arduino-app-lab-object-detection-using-flask.git
@@ -137,6 +140,31 @@ process_device() {
     if ! adb -s "$device" shell "source /etc/profile; bash /home/arduino/.${UNOQ_SCRIPT}"; then
         log "$device" "Remote setup script execution failed."
         return 1
+    fi
+
+    if [ -d "$MODEL_BUNDLE_DIR" ]; then
+        log "$device" "Restoring offline model bundle..."
+        if ! adb -s "$device" shell "rm -rf '$MODEL_STAGING_PATH' && mkdir -p '$MODEL_STAGING_PATH'"; then
+            log "$device" "Failed to create model staging directory."
+            return 1
+        fi
+        for model_family in "$MODEL_BUNDLE_DIR"/*; do
+            [ -d "$model_family" ] || continue
+            if ! adb -s "$device" push "$model_family" "$MODEL_STAGING_PATH/"; then
+                log "$device" "Failed to restore $model_family."
+                return 1
+            fi
+        done
+        install_models="mkdir -p '$MODELS_TARGET_PATH' && cp -a '$MODEL_STAGING_PATH'/.' '$MODELS_TARGET_PATH' && chown -R arduino:arduino '$MODELS_TARGET_PATH' && rm -rf '$MODEL_STAGING_PATH'"
+        if ! adb -s "$device" shell "sudo -n bash -lc \"$install_models\""; then
+            sudo_password="${UNOQ_DEFAULT_PASSWORD:-arduino}"
+            if ! adb -s "$device" shell "printf '%s\\n' '$sudo_password' | sudo -S -k -p '' bash -lc \"$install_models\""; then
+                log "$device" "Failed to install offline model bundle with sudo."
+                return 1
+            fi
+        fi
+    else
+        log "$device" "$MODEL_BUNDLE_DIR not found locally. Skipping model restore."
     fi
 
     log "$device" "Update workflow completed successfully."

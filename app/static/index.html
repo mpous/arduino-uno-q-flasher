@@ -122,13 +122,15 @@
                     </div>
                 </div>
                 <label class="post-update-label">
-                    Post-update command (run after setup)
-                    <input
-                        type="text"
+                    Post-update commands (one command per line, run in order)
+                    <textarea
                         id="post-update-cmd"
+                        rows="5"
                         placeholder="leave empty to skip"
-                        value="app start examples:real-time-accelerometer"
-                    />
+                    >arduino-app-cli app start user:workshop-racing-telemetry-unoq
+arduino-app-cli app stop user:workshop-racing-telemetry-unoq
+arduino-app-cli app start examples:inspirational/real-time-accelerometer
+arduino-app-cli app stop examples:inspirational/real-time-accelerometer</textarea>
                 </label>
             </div>
         </div>
@@ -144,26 +146,50 @@
                 </div>
             </div>
             <div class="step-body">
-                <div class="run-mode" role="radiogroup" aria-label="Run mode">
+                <div class="run-mode" role="group" aria-label="Steps to run">
                     <label class="run-mode-option">
-                        <input type="radio" name="run-mode" value="start" checked />
+                        <input type="checkbox" id="run-step-wifi" checked />
                         <span class="run-mode-label">
-                            <span class="run-mode-title">Full setup</span>
-                            <span class="run-mode-desc">First-time provisioning: WiFi, app, password, run setup + post-update.</span>
+                            <span class="run-mode-title">Step 1: Configure WiFi + device password</span>
+                            <span class="run-mode-desc">Runs push_env + change_password.</span>
                         </span>
                     </label>
                     <label class="run-mode-option">
-                        <input type="radio" name="run-mode" value="update" />
+                        <input type="checkbox" id="run-step-app" checked />
                         <span class="run-mode-label">
-                            <span class="run-mode-title">Update only</span>
-                            <span class="run-mode-desc">Re-run setup script on already-configured boards (no app/WiFi/password change).</span>
+                            <span class="run-mode-title">Step 2: Push app folder + properties</span>
+                            <span class="run-mode-desc">Requires a selected upload folder unless Step 2 card is skipped.</span>
+                        </span>
+                    </label>
+                    <label class="run-mode-option">
+                        <input type="checkbox" id="run-step-setup" checked />
+                        <span class="run-mode-label">
+                            <span class="run-mode-title">Step 3: Run setup script</span>
+                            <span class="run-mode-desc">Includes WiFi validation + arduino-app-cli system update.</span>
+                        </span>
+                    </label>
+                    <label class="run-mode-option">
+                        <input type="checkbox" id="run-step-prune" />
+                        <span class="run-mode-label">
+                            <span class="run-mode-title">Step 4: Prune old Docker images</span>
+                            <span class="run-mode-desc">Optional cleanup before post-update.</span>
+                        </span>
+                    </label>
+                    <label class="run-mode-option">
+                        <input type="checkbox" id="run-step-post-update" checked />
+                        <span class="run-mode-label">
+                            <span class="run-mode-title">Step 5: Run post-update command</span>
+                            <span class="run-mode-desc">Uses the command configured in Step 2.</span>
                         </span>
                     </label>
                 </div>
                 <div class="step-actions">
-                    <button id="run-btn" class="btn btn-primary" disabled>Run on all boards</button>
+                    <button id="run-btn" class="btn btn-primary" disabled>Run selected steps on all boards</button>
                 </div>
-                <button id="refresh-btn" class="btn btn-ghost btn-small">⟳ Refresh devices</button>
+                <div class="step-actions">
+                    <button id="refresh-btn" class="btn btn-ghost btn-small">⟳ Refresh devices</button>
+                    <button id="wifi-check-all-btn" class="btn btn-ghost btn-small">Check WiFi on all boards</button>
+                </div>
                 <div id="run-status" class="muted"></div>
             </div>
         </div>
@@ -180,7 +206,9 @@
                     <span class="elapsed" hidden></span>
                 </div>
                 <div class="device-actions">
+                    <span class="wifi-badge" data-status="unknown" title="No WiFi check yet">WiFi ?</span>
                     <button class="btn btn-small identify-btn" title="Blink the red LED to find this board on the bench">Identify</button>
+                    <button class="btn btn-small wifi-check-btn" title="Run quick WiFi and internet connectivity checks">WiFi Check</button>
                     <button class="btn btn-small retry-btn" hidden>Retry</button>
                 </div>
             </div>
@@ -195,9 +223,13 @@
             </div>
             <div class="failure-reason" hidden></div>
             <div class="summary-panel" hidden>
-                <div class="summary-header">Device setup summary</div>
-                <div class="summary-row"><span class="label">Status</span><span class="summary-status"></span></div>
-                <div class="summary-row"><span class="label">Time</span><span class="summary-time"></span></div>
+                <div class="summary-header">Update summary</div>
+                <div class="summary-row"><span class="label">Overall</span><span class="summary-overall"></span></div>
+                <div class="summary-row"><span class="label">Phase</span><span class="summary-phase"></span></div>
+                <div class="summary-row"><span class="label">Setup</span><span class="summary-status"></span></div>
+                <div class="summary-row"><span class="label">Setup time</span><span class="summary-time"></span></div>
+                <div class="summary-row"><span class="label">Post-update</span><span class="summary-post-update"></span></div>
+                <ul class="summary-warnings"></ul>
                 <ul class="summary-errors"></ul>
             </div>
             <pre class="log-panel"></pre>

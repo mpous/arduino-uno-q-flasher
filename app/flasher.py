@@ -31,10 +31,16 @@ EmitFn = Callable[[Event], Awaitable[None]]
 
 SETUP_SCRIPT_NAME = "unoq-setup.sh"
 PROPERTIES_FILE_NAME = "properties.msgpack"
-PROPERTIES_TARGET_PATH = "/var/lib/arduino-app-cli/properties.msgpack"
+PROPERTIES_TARGET_PATHS = (
+    "/home/arduino/.local/share/arduino-app-cli/properties.msgpack",
+    "/tmp/properties.msgpack",
+)
 APPS_TARGET_DIR = "/home/arduino/ArduinoApps/"
 REMOTE_SETUP_SCRIPT_PATH = f"/home/arduino/.{SETUP_SCRIPT_NAME}"
 REMOTE_ENV_PATH = "/home/arduino/.env"
+MODEL_BUNDLES_DIR_NAME = "model-bundles"
+REMOTE_MODELS_DIR = "/var/lib/arduino-app-cli/models"
+REMOTE_MODEL_STAGING_DIR = "/home/arduino/.unoq-model-bundles"
 
 PASSWORD_SUCCESS_RE = re.compile(
     r"password updated successfully"
@@ -123,6 +129,7 @@ class FlasherContext:
         unoq_default_password: str | None,
         project_root: Path,
         post_update_cmd: str | None = None,
+        prune_docker_before_post_update: bool = False,
     ) -> None:
         self.app_folder = app_folder
         self.setup_script = setup_script
@@ -130,6 +137,7 @@ class FlasherContext:
         self.unoq_default_password = unoq_default_password
         self.project_root = project_root
         self.post_update_cmd = post_update_cmd
+        self.prune_docker_before_post_update = prune_docker_before_post_update
 
     @property
     def properties_file(self) -> Path | None:
@@ -140,6 +148,13 @@ class FlasherContext:
         candidate2 = self.project_root / PROPERTIES_FILE_NAME
         if candidate2.is_file():
             return candidate2
+        return None
+
+    @property
+    def model_bundle_dir(self) -> Path | None:
+        candidate = self.project_root / MODEL_BUNDLES_DIR_NAME
+        if candidate.is_dir() and any(candidate.iterdir()):
+            return candidate
         return None
 
 
@@ -253,6 +268,11 @@ async def _run_stages(
     Emits SetupSummaryEvent on terminal paths.
     """
 
+    # Keep request-provided skips and optionally force-skip prune when disabled.
+    local_skip_stages = set(skip_stages)
+    if not ctx.prune_docker_before_post_update:
+        local_skip_stages.add("prune_docker_images")
+
     async def line_cb_for(stage: Stage):
         async def cb(line: str, stream: str) -> None:
             await emit(LogEvent(device=serial, stage=stage, line=line, stream=stream))  # type: ignore[arg-type]
@@ -269,7 +289,7 @@ async def _run_stages(
         *,
         required: bool,
     ) -> bool:
-        if stage in skip_stages:
+        if stage in local_skip_stages:
             if stage not in OPTIONAL_STAGES:
                 await log(
                     f"Cannot skip required stage '{stage}'. Running anyway.",
@@ -363,8 +383,15 @@ async def _run_stages(
             )
             return True
         cb = await line_cb_for("push_properties")
-        rc, _ = await adb.push(serial, props, PROPERTIES_TARGET_PATH, cb)
-        return rc == 0
+        for target in PROPERTIES_TARGET_PATHS:
+            target_dir = target.rsplit("/", 1)[0]
+            rc, _ = await adb.shell(serial, f"mkdir -p {target_dir}", cb)
+            if rc != 0:
+                return False
+            rc, _ = await adb.push(serial, props, target, cb)
+            if rc != 0:
+                return False
+        return True
 
     await run_stage("push_properties", stage_push_properties, required=False)
 
@@ -375,7 +402,69 @@ async def _run_stages(
             f"source /etc/profile; bash {REMOTE_SETUP_SCRIPT_PATH}",
             line_cb_run_setup,
         )
-        return rc == 0
+        if rc != 0:
+            return False
+
+        setup_result, _ = parser.finish()
+        if setup_result is not None and setup_result.status == "FAILED":
+            return False
+
+        model_bundle = ctx.model_bundle_dir
+        if model_bundle is None:
+            await log(
+                "No local model-bundles directory; skipping model restore.",
+                stage="run_setup",
+            )
+            return True
+
+        await log(
+            f"Restoring offline model bundle to {REMOTE_MODELS_DIR}...",
+            stage="run_setup",
+        )
+        rc, _ = await adb.shell(
+            serial,
+            f"rm -rf {REMOTE_MODEL_STAGING_DIR} && "
+            f"mkdir -p {REMOTE_MODEL_STAGING_DIR}",
+            line_cb_run_setup,
+        )
+        if rc != 0:
+            return False
+        for model_family in model_bundle.iterdir():
+            if not model_family.is_dir():
+                continue
+            rc, _ = await adb.push(
+                serial,
+                model_family,
+                f"{REMOTE_MODEL_STAGING_DIR}/",
+                line_cb_run_setup,
+            )
+            if rc != 0:
+                return False
+
+        install_cmd = (
+            f"mkdir -p {REMOTE_MODELS_DIR} && "
+            f"cp -a {REMOTE_MODEL_STAGING_DIR}/. {REMOTE_MODELS_DIR}/ && "
+            f"chown -R arduino:arduino {REMOTE_MODELS_DIR} && "
+            f"rm -rf {REMOTE_MODEL_STAGING_DIR}"
+        )
+        sudo_candidates = [ctx.unoq_default_password, "arduino"]
+        rc, _ = await adb.shell(
+            serial,
+            f"sudo -n bash -lc {shlex.quote(install_cmd)}",
+            line_cb_run_setup,
+        )
+        if rc == 0:
+            return True
+        for password in dict.fromkeys(p for p in sudo_candidates if p):
+            rc, _ = await adb.shell(
+                serial,
+                f"printf '%s\\n' {shlex.quote(password)} | "
+                f"sudo -S -k -p '' bash -lc {shlex.quote(install_cmd)}",
+                line_cb_run_setup,
+            )
+            if rc == 0:
+                return True
+        return False
 
     if not await run_stage("run_setup", stage_run_setup, required=True):
         await _emit_summary(serial, parser, emit)
@@ -389,7 +478,37 @@ async def _run_stages(
     if result is not None and result.status == "FAILED":
         return False, (hint.message if hint else "Device-side setup reported FAILED.")
 
-    # 8. post-update command (optional). Failure here is non-fatal.
+    # 8. prune unused docker images/containers before post-update (optional).
+    async def stage_prune_docker_images() -> bool:
+        cb = await line_cb_for("prune_docker_images")
+        # Best-effort cleanup for stale artifacts from previous app versions.
+        # Does not remove running containers/images in use.
+        prune_cmd = (
+            "set -e; "
+            "if command -v docker >/dev/null 2>&1; then "
+            "echo '[prune] docker before:'; docker system df || true; "
+            "docker container prune -f; "
+            "docker image prune -a -f; "
+            "echo '[prune] docker after:'; docker system df || true; "
+            "elif command -v podman >/dev/null 2>&1; then "
+            "echo '[prune] podman before:'; podman system df || true; "
+            "podman container prune -f; "
+            "podman image prune -a -f; "
+            "echo '[prune] podman after:'; podman system df || true; "
+            "else "
+            "echo '[prune] no docker/podman found; skipping'; "
+            "fi"
+        )
+        rc, _ = await adb.shell(serial, prune_cmd, cb)
+        return rc == 0
+
+    await run_stage(
+        "prune_docker_images",
+        stage_prune_docker_images,
+        required=False,
+    )
+
+    # 9. post-update command (optional). Failure here is non-fatal.
     async def stage_post_update() -> bool:
         if not ctx.post_update_cmd:
             await log(
@@ -398,17 +517,39 @@ async def _run_stages(
             )
             return True
         cb = await line_cb_for("post_update")
-        # Run the command inside a login shell so `app`, `arduino-app-cli`,
-        # and any other alias/PATH entry defined in /etc/profile.d/* or the
-        # arduino user's ~/.bashrc / ~/.profile is resolved. `source /etc/profile`
-        # alone is not enough — some UNO Q images register the `app` shim only
-        # in ~/.bashrc.
-        rc, _ = await adb.shell(
-            serial,
-            f"bash -lc {shlex.quote(ctx.post_update_cmd)}",
-            cb,
-        )
-        return rc == 0
+        commands = [
+            line.strip()
+            for line in ctx.post_update_cmd.splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        ]
+        if not commands:
+            await log(
+                "No runnable post-update commands found (empty/comment-only). Skipping.",
+                stage="post_update",
+            )
+            return True
+
+        total = len(commands)
+        for idx, cmd in enumerate(commands, start=1):
+            await log(
+                f"Running post-update command {idx}/{total}: {cmd}",
+                stage="post_update",
+            )
+            # Run each command inside a login shell so `app`, `arduino-app-cli`,
+            # and any PATH entries from shell init files are available.
+            rc, _ = await adb.shell(
+                serial,
+                f"bash -lc {shlex.quote(cmd)}",
+                cb,
+            )
+            if rc != 0:
+                await log(
+                    f"Command {idx}/{total} failed with exit code {rc}.",
+                    stage="post_update",
+                    stream="stderr",
+                )
+                return False
+        return True
 
     await run_stage("post_update", stage_post_update, required=False)
     return True, None
@@ -512,22 +653,43 @@ async def _change_password(
         return True
 
     if PASSWORD_NEEDS_CURRENT_RE.search(combined):
-        await log("Retrying password change with current password 'arduino'...", stage="change_password")
-        rc2, out2 = await attempt(
-            f"printf '%s\\n%s\\n%s\\n' 'arduino' {pw_q} {pw_q} | passwd arduino"
+        # When passwd asks for the current password, first try the configured
+        # default (many boards are already on that value), then fall back to
+        # the factory default used on older images.
+        current_candidates: list[tuple[str, str]] = []
+        if new_pw:
+            current_candidates.append((new_pw, "configured default password"))
+        if new_pw != "arduino":
+            current_candidates.append(("arduino", "factory default password 'arduino'"))
+
+        for current_pw, label in current_candidates:
+            await log(
+                f"Retrying password change with current password candidate: {label}...",
+                stage="change_password",
+            )
+            current_q = shlex.quote(current_pw)
+            rc2, out2 = await attempt(
+                f"printf '%s\\n%s\\n%s\\n' {current_q} {pw_q} {pw_q} | passwd arduino"
+            )
+            combined = out2
+            if PASSWORD_SUCCESS_RE.search(combined):
+                await log(
+                    f"Password changed successfully using {label}.",
+                    stage="change_password",
+                )
+                return True
+            if PASSWORD_TOKEN_ERROR_RE.search(combined):
+                await log("Token manipulation error; password may already be changed.", stage="change_password")
+                return True
+            if re.search(r"password unchanged", combined, re.IGNORECASE):
+                # Try the next candidate before concluding it's already non-default.
+                continue
+
+        await log(
+            "Password unchanged; none of the known current-password candidates worked.",
+            stage="change_password",
         )
-        combined = out2
-        if PASSWORD_SUCCESS_RE.search(combined):
-            await log("Password changed successfully using current password.", stage="change_password")
-            return True
-        if PASSWORD_TOKEN_ERROR_RE.search(combined):
-            await log("Token manipulation error; password may already be changed.", stage="change_password")
-            return True
-        if re.search(r"password unchanged", combined, re.IGNORECASE):
-            await log("Password unchanged; it may already be non-default.", stage="change_password")
-            return True
-        await log(f"Password change failed. Output: {combined}", stage="change_password", stream="stderr")
-        return False
+        return True
 
     if PASSWORD_TOKEN_ERROR_RE.search(combined):
         await log("Token manipulation error; password may already be changed.", stage="change_password")

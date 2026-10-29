@@ -492,13 +492,14 @@ html, body {
     border-color: var(--border-strong);
 }
 
-.run-mode-option input[type="radio"] {
+.run-mode-option input[type="radio"],
+.run-mode-option input[type="checkbox"] {
     margin: 3px 0 0 0;
     accent-color: var(--accent);
     flex-shrink: 0;
 }
 
-.run-mode-option:has(input[type="radio"]:checked) {
+.run-mode-option:has(input:checked) {
     border-color: var(--accent);
     background: var(--accent-soft);
 }
@@ -687,6 +688,9 @@ html, body {
     font-size: 12.5px;
     width: 100%;
     transition: border-color 0.15s, box-shadow 0.15s;
+    resize: vertical;
+    min-height: 104px;
+    line-height: 1.45;
 }
 
 #post-update-cmd:focus {
@@ -744,6 +748,38 @@ html, body {
 .device-actions {
     display: flex;
     gap: 6px;
+    align-items: center;
+}
+
+.wifi-badge {
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    padding: 2px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--surface-muted);
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+
+.wifi-badge[data-status="unknown"] {
+    background: var(--surface-muted);
+    color: var(--text-muted);
+    border-color: var(--border);
+}
+
+.wifi-badge[data-status="pass"] {
+    background: var(--success-bg);
+    color: var(--success);
+    border-color: var(--success-border);
+}
+
+.wifi-badge[data-status="fail"] {
+    background: var(--danger-bg);
+    color: var(--danger);
+    border-color: var(--danger-border);
 }
 
 /* ===== status badge ===== */
@@ -847,7 +883,12 @@ html, body {
     padding: 10px 12px;
     margin: 0;
     height: 200px;
+    max-height: 200px;
+    min-height: 200px;
+    overflow-x: hidden;
     overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 11.5px;
     line-height: 1.55;
@@ -918,19 +959,42 @@ html, body {
 
 .summary-row .label {
     color: var(--text-muted);
-    width: 60px;
+    width: 84px;
     font-weight: 500;
 }
 
 .summary-status[data-status="SUCCESS"] { color: var(--success); font-weight: 600; }
 .summary-status[data-status="FAILED"]  { color: var(--danger);  font-weight: 600; }
 
+.summary-overall[data-status="running"] { color: var(--info); font-weight: 600; }
+.summary-overall[data-status="success"] { color: var(--success); font-weight: 600; }
+.summary-overall[data-status="failed"]  { color: var(--danger); font-weight: 600; }
+
+.summary-post-update[data-status="pending"] { color: var(--text-muted); }
+.summary-post-update[data-status="running"] { color: var(--info); }
+.summary-post-update[data-status="completed"] { color: var(--success); font-weight: 600; }
+.summary-post-update[data-status="skipped"] { color: var(--text-faint); font-style: italic; }
+.summary-post-update[data-status="failed"] { color: var(--danger); font-weight: 600; }
+
+.summary-phase {
+    color: var(--text-muted);
+}
+
+.summary-warnings,
 .summary-errors {
     margin: 6px 0 0 18px;
     padding: 0;
+}
+
+.summary-warnings {
+    color: var(--warn);
+}
+
+.summary-errors {
     color: var(--danger);
 }
 
+.summary-warnings li,
 .summary-errors li {
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 11.5px;
